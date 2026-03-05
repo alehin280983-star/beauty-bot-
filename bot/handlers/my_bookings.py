@@ -22,19 +22,19 @@ class CancelBookingCD(CallbackData, prefix="cxl"):
     booking_id: str
 
 
-@router.message(F.text == "📅 Мои записи")
+@router.message(F.text == "📅 Мої записи")
 async def cmd_my_bookings(message: Message, session: AsyncSession) -> None:
     client_result = await session.execute(
         select(Client).where(Client.telegram_id == message.from_user.id)
     )
     client = client_result.scalar_one_or_none()
     if client is None:
-        await message.answer("Вы ещё не записывались.", reply_markup=MAIN_MENU)
+        await message.answer("Ви ще не записувались.", reply_markup=MAIN_MENU)
         return
 
     bookings = await get_client_active_bookings(session, client.id)
     if not bookings:
-        await message.answer("У вас нет активных записей.", reply_markup=MAIN_MENU)
+        await message.answer("Немає активних записів.", reply_markup=MAIN_MENU)
         return
 
     tz = ZoneInfo(settings.studio_timezone)
@@ -50,12 +50,12 @@ async def cmd_my_bookings(message: Message, session: AsyncSession) -> None:
         text = (
             f"💇 <b>{b['service_name']}</b>\n"
             f"👤 {b['master_name']}\n"
-            f"📅 {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}\n"
-            f"💰 {int(b['price_at_booking'])} руб"
+            f"📅 {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
+            f"💰 {int(b['price_at_booking'])} грн"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(
-                text="❌ Отменить",
+                text="❌ Скасувати",
                 callback_data=CancelBookingCD(booking_id=str(b["id"])).pack(),
             )
         ]])
@@ -73,7 +73,7 @@ async def on_cancel_booking(
 
     start_time = await get_booking_start_time(session, booking_id)
     if start_time is None:
-        await callback.answer("Запись не найдена.", show_alert=True)
+        await callback.answer("Запис не знайдено.", show_alert=True)
         return
 
     now = datetime.utcnow()
@@ -85,7 +85,7 @@ async def on_cancel_booking(
     deadline = start_utc - timedelta(hours=settings.cancel_deadline_hours)
     if now > deadline:
         await callback.answer(
-            f"Отмена недоступна менее чем за {settings.cancel_deadline_hours} ч до записи.",
+            f"Скасування недоступне менш ніж за {settings.cancel_deadline_hours} год до запису.",
             show_alert=True,
         )
         return
@@ -93,9 +93,9 @@ async def on_cancel_booking(
     booking = await cancel_booking(session, booking_id, cancelled_by="client")
     await session.commit()
 
-    await callback.answer("Запись отменена.")
+    await callback.answer("Запис скасовано.")
     await callback.message.edit_text(
-        callback.message.text + "\n\n<i>❌ Отменено</i>",
+        callback.message.text + "\n\n<i>❌ Скасовано</i>",
         reply_markup=None,
     )
 
@@ -107,9 +107,9 @@ async def on_cancel_booking(
         local = start_time.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
 
     admin_text = (
-        f"❌ <b>Отмена записи</b>\n\n"
-        f"Клиент: {callback.from_user.full_name} (@{callback.from_user.username or '—'})\n"
-        f"Дата: {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}"
+        f"❌ <b>Скасування запису</b>\n\n"
+        f"Клієнт: {callback.from_user.full_name} (@{callback.from_user.username or '—'})\n"
+        f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}"
     )
     for admin_id in settings.admin_ids:
         try:

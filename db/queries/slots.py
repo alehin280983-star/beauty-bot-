@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import uuid
 from datetime import date, datetime, timedelta
 from typing import List
@@ -81,7 +82,7 @@ async def get_available_slots(
     step_min: int,
 ) -> List[Slot]:
     all_slots = await get_slots_for_date(session, master_id, slot_date)
-    slots_needed = service_duration_min // step_min
+    slots_needed = max(1, math.ceil(service_duration_min / step_min))
 
     available = []
     for i, slot in enumerate(all_slots):
@@ -106,7 +107,7 @@ async def get_dates_with_available_slots(
     date_to = today + timedelta(days=days - 1)
     all_slots = await get_slots_for_range(session, master_id, today, date_to)
 
-    slots_needed = service_duration_min // step_min
+    slots_needed = max(1, math.ceil(service_duration_min / step_min))
 
     # Group by date
     from collections import defaultdict
@@ -137,8 +138,12 @@ async def lock_slots_for_booking(
     step_min: int,
 ) -> List[Slot]:
     """Lock slots with FOR UPDATE NOWAIT. Raises NotEnoughSlots or SlotAlreadyTaken."""
+    # Normalise to naive UTC to match DB storage
+    if start_time.tzinfo is not None:
+        from zoneinfo import ZoneInfo
+        start_time = start_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
     end_time = start_time + timedelta(minutes=duration_min)
-    expected_count = duration_min // step_min
+    expected_count = max(1, math.ceil(duration_min / step_min))
 
     result = await session.execute(
         select(Slot)

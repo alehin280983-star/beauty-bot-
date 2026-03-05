@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import calendar as _cal
+from datetime import timezone
 from zoneinfo import ZoneInfo
 
 from aiogram.filters.callback_data import CallbackData
@@ -17,14 +19,14 @@ class MasterCD(CallbackData, prefix="mst"):
 
 
 class TimeCD(CallbackData, prefix="tm"):
-    starts_at: str  # ISO datetime
+    ts: int  # Unix timestamp (UTC, naive)
 
 
 def services_keyboard(services: list[Service]) -> InlineKeyboardMarkup:
     buttons = [
         [
             InlineKeyboardButton(
-                text=f"{s.name} — {s.duration_min} мин — {int(s.price)} руб",
+                text=f"{s.name} — {s.duration_min} хв — {int(s.price)} грн",
                 callback_data=ServiceCD(service_id=str(s.id)).pack(),
             )
         ]
@@ -56,12 +58,15 @@ def time_slots_keyboard(slots: list[Slot], tz: ZoneInfo) -> InlineKeyboardMarkup
         dt = slot.starts_at
         if dt.tzinfo is not None:
             local = dt.astimezone(tz)
+            ts = int(dt.astimezone(timezone.utc).timestamp())
         else:
-            local = dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+            dt_utc = dt.replace(tzinfo=timezone.utc)
+            local = dt_utc.astimezone(tz)
+            ts = int(dt_utc.timestamp())
         row.append(
             InlineKeyboardButton(
                 text=local.strftime("%H:%M"),
-                callback_data=TimeCD(starts_at=dt.isoformat()).pack(),
+                callback_data=TimeCD(ts=ts).pack(),
             )
         )
         if len(row) == 4:

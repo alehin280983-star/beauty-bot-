@@ -53,7 +53,7 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) 
     )
     await session.commit()
     await message.answer(
-        f"Добро пожаловать в <b>{settings.studio_name}</b>! 👋\n\nВыберите действие:",
+        f"Ласкаво просимо до <b>{settings.studio_name}</b>! 👋\n\nОберіть дію:",
         reply_markup=MAIN_MENU,
     )
 
@@ -64,15 +64,15 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) 
 async def cmd_price(message: Message, session: AsyncSession) -> None:
     services = await get_visible_services(session)
     if not services:
-        await message.answer("Услуги пока не добавлены.", reply_markup=MAIN_MENU)
+        await message.answer("Послуги ще не додано.", reply_markup=MAIN_MENU)
         return
-    lines = [f"<b>{s.name}</b> — {s.duration_min} мин — {int(s.price)} руб" for s in services]
+    lines = [f"<b>{s.name}</b> — {s.duration_min} хв — {int(s.price)} грн" for s in services]
     await message.answer("\n".join(lines), reply_markup=MAIN_MENU)
 
 
 # ── О нас ─────────────────────────────────────────────────────────────────────
 
-@router.message(F.text == "ℹ️ О нас")
+@router.message(F.text == "ℹ️ Про нас")
 async def cmd_about(message: Message) -> None:
     await message.answer(
         f"<b>{settings.studio_name}</b>\n\n"
@@ -82,16 +82,16 @@ async def cmd_about(message: Message) -> None:
     )
 
 
-# ── Записаться: выбор услуги ──────────────────────────────────────────────────
+# ── Записатись: вибір послуги ─────────────────────────────────────────────────
 
-@router.message(F.text == "📋 Записаться")
+@router.message(F.text == "📋 Записатись")
 async def cmd_book(message: Message, session: AsyncSession, state: FSMContext) -> None:
     services = await get_visible_services(session)
     if not services:
-        await message.answer("Услуги пока не добавлены.", reply_markup=MAIN_MENU)
+        await message.answer("Послуги ще не додано.", reply_markup=MAIN_MENU)
         return
     await state.set_state(BookingFSM.choosing_service)
-    await message.answer("Выберите услугу:", reply_markup=services_keyboard(services))
+    await message.answer("Оберіть послугу:", reply_markup=services_keyboard(services))
 
 
 @router.callback_query(BookingFSM.choosing_service, ServiceCD.filter())
@@ -105,7 +105,7 @@ async def on_service_chosen(
     services = await get_visible_services(session)
     service = next((s for s in services if s.id == service_id), None)
     if service is None:
-        await callback.answer("Услуга недоступна. Начните заново.")
+        await callback.answer("Послуга недоступна. Почніть спочатку.")
         await state.clear()
         return
 
@@ -118,7 +118,7 @@ async def on_service_chosen(
 
     masters = await get_masters_for_service(session, service_id)
     if not masters:
-        await callback.answer("Нет доступных мастеров для этой услуги.")
+        await callback.answer("Немає доступних майстрів для цієї послуги.")
         return
 
     await callback.answer()
@@ -131,12 +131,12 @@ async def on_service_chosen(
     else:
         await state.set_state(BookingFSM.choosing_master)
         await callback.message.edit_text(
-            f"Услуга: <b>{service.name}</b>\n\nВыберите мастера:",
+            f"Послуга: <b>{service.name}</b>\n\nОберіть майстра:",
             reply_markup=masters_keyboard(masters),
         )
 
 
-# ── Выбор мастера ─────────────────────────────────────────────────────────────
+# ── Вибір майстра ─────────────────────────────────────────────────────────────
 
 @router.callback_query(BookingFSM.choosing_master, MasterCD.filter())
 async def on_master_chosen(
@@ -152,7 +152,7 @@ async def on_master_chosen(
     masters = await get_masters_for_service(session, service_id)
     master = next((m for m in masters if m.id == master_id), None)
     if master is None:
-        await callback.answer("Мастер недоступен. Начните заново.")
+        await callback.answer("Майстер недоступний. Почніть спочатку.")
         await state.clear()
         return
 
@@ -172,11 +172,11 @@ async def back_to_service(
     await state.set_state(BookingFSM.choosing_service)
     await callback.answer()
     await callback.message.edit_text(
-        "Выберите услугу:", reply_markup=services_keyboard(services)
+        "Оберіть послугу:", reply_markup=services_keyboard(services)
     )
 
 
-# ── Выбор даты (календарь) ────────────────────────────────────────────────────
+# ── Вибір дати (календар) ─────────────────────────────────────────────────────
 
 async def _show_calendar(
     message: Message,
@@ -202,9 +202,9 @@ async def _show_calendar(
 
     data = await state.get_data()
     text = (
-        f"Услуга: <b>{data['service_name']}</b>\n"
-        f"Мастер: <b>{data['master_name']}</b>\n\n"
-        "Выберите дату:"
+        f"Послуга: <b>{data['service_name']}</b>\n"
+        f"Майстер: <b>{data['master_name']}</b>\n\n"
+        "Оберіть дату:"
     )
     kb = calendar_keyboard(today.year, today.month, available_set, today, max_date)
 
@@ -248,7 +248,7 @@ async def on_date_chosen(
     available_set = {date.fromisoformat(d) for d in data.get("available_dates", [])}
 
     if chosen_date not in available_set:
-        await callback.answer("На эту дату нет свободного времени.")
+        await callback.answer("На цю дату немає вільного часу.")
         return
 
     master_id = uuid.UUID(data["master_id"])
@@ -256,7 +256,7 @@ async def on_date_chosen(
 
     slots = await get_available_slots(session, master_id, chosen_date, duration_min, 30)
     if not slots:
-        await callback.answer("Слоты заняты. Выберите другую дату.")
+        await callback.answer("Слоти зайняті. Оберіть іншу дату.")
         return
 
     await state.update_data(chosen_date=chosen_date.isoformat())
@@ -265,10 +265,10 @@ async def on_date_chosen(
 
     tz = ZoneInfo(settings.studio_timezone)
     await callback.message.edit_text(
-        f"Услуга: <b>{data['service_name']}</b>\n"
-        f"Мастер: <b>{data['master_name']}</b>\n"
+        f"Послуга: <b>{data['service_name']}</b>\n"
+        f"Майстер: <b>{data['master_name']}</b>\n"
         f"Дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\n"
-        "Выберите время:",
+        "Оберіть час:",
         reply_markup=time_slots_keyboard(slots, tz),
     )
 
@@ -287,18 +287,18 @@ async def back_to_master_from_date(
         await state.set_state(BookingFSM.choosing_service)
         await callback.answer()
         await callback.message.edit_text(
-            "Выберите услугу:", reply_markup=services_keyboard(services)
+            "Оберіть послугу:", reply_markup=services_keyboard(services)
         )
     else:
         await state.set_state(BookingFSM.choosing_master)
         await callback.answer()
         await callback.message.edit_text(
-            f"Услуга: <b>{data['service_name']}</b>\n\nВыберите мастера:",
+            f"Послуга: <b>{data['service_name']}</b>\n\nОберіть майстра:",
             reply_markup=masters_keyboard(masters),
         )
 
 
-# ── Выбор времени ─────────────────────────────────────────────────────────────
+# ── Вибір часу ────────────────────────────────────────────────────────────────
 
 @router.callback_query(BookingFSM.choosing_time, TimeCD.filter())
 async def on_time_chosen(
@@ -306,27 +306,24 @@ async def on_time_chosen(
     callback_data: TimeCD,
     state: FSMContext,
 ) -> None:
-    await state.update_data(slot_start=callback_data.starts_at)
+    from datetime import datetime, timezone as _tz
+    dt_utc = datetime.fromtimestamp(callback_data.ts, tz=_tz.utc)
+    await state.update_data(slot_start=dt_utc.isoformat())
     await state.set_state(BookingFSM.confirming)
     await callback.answer()
 
     data = await state.get_data()
-    from datetime import datetime
     tz = ZoneInfo(settings.studio_timezone)
-    dt = datetime.fromisoformat(callback_data.starts_at)
-    if dt.tzinfo is not None:
-        local = dt.astimezone(tz)
-    else:
-        local = dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+    local = dt_utc.astimezone(tz)
 
     await callback.message.edit_text(
-        f"<b>Подтвердите запись:</b>\n\n"
-        f"💇 Услуга: {data['service_name']}\n"
-        f"👤 Мастер: {data['master_name']}\n"
+        f"<b>Підтвердіть запис:</b>\n\n"
+        f"💇 Послуга: {data['service_name']}\n"
+        f"👤 Майстер: {data['master_name']}\n"
         f"📅 Дата: {local.strftime('%d.%m.%Y')}\n"
-        f"🕐 Время: {local.strftime('%H:%M')}\n"
-        f"💰 Цена: {data['price']} руб\n\n"
-        "Всё верно?",
+        f"🕐 Час: {local.strftime('%H:%M')}\n"
+        f"💰 Ціна: {data['price']} грн\n\n"
+        "Все вірно?",
         reply_markup=_confirm_keyboard(),
     )
 
@@ -335,13 +332,13 @@ def _confirm_keyboard():
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_booking"),
-            InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_booking_fsm"),
+            InlineKeyboardButton(text="✅ Підтвердити", callback_data="confirm_booking"),
+            InlineKeyboardButton(text="❌ Скасувати", callback_data="cancel_booking_fsm"),
         ]
     ])
 
 
-# ── Подтверждение / отмена FSM ────────────────────────────────────────────────
+# ── Підтвердження / скасування FSM ───────────────────────────────────────────
 
 @router.callback_query(BookingFSM.confirming, F.data == "confirm_booking")
 async def on_confirm_booking(
@@ -372,7 +369,7 @@ async def on_confirm_booking(
         await session.commit()
     except (SlotAlreadyTaken, NotEnoughSlots):
         await session.rollback()
-        await callback.answer("Это время уже занято. Выберите другое.", show_alert=True)
+        await callback.answer("Цей час вже зайнятий. Оберіть інший.", show_alert=True)
         # Return to time selection keeping service/master/date
         chosen_date = date.fromisoformat(data["chosen_date"])
         master_id = uuid.UUID(data["master_id"])
@@ -382,10 +379,10 @@ async def on_confirm_booking(
         await state.set_state(BookingFSM.choosing_time)
         tz = ZoneInfo(settings.studio_timezone)
         await callback.message.edit_text(
-            f"Услуга: <b>{data['service_name']}</b>\n"
-            f"Мастер: <b>{data['master_name']}</b>\n"
+            f"Послуга: <b>{data['service_name']}</b>\n"
+            f"Майстер: <b>{data['master_name']}</b>\n"
             f"Дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\n"
-            "Выберите время:",
+            "Оберіть час:",
             reply_markup=time_slots_keyboard(slots, tz),
         )
         return
@@ -398,24 +395,24 @@ async def on_confirm_booking(
     else:
         local = slot_start.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
 
-    await callback.answer("Запись подтверждена! ✅")
+    await callback.answer("Запис підтверджено! ✅")
     await callback.message.edit_text(
-        f"✅ <b>Запись создана!</b>\n\n"
+        f"✅ <b>Запис створено!</b>\n\n"
         f"💇 {data['service_name']}\n"
         f"👤 {data['master_name']}\n"
-        f"📅 {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}\n"
-        f"💰 {data['price']} руб"
+        f"📅 {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
+        f"💰 {data['price']} грн"
     )
-    await callback.message.answer("Выберите действие:", reply_markup=MAIN_MENU)
+    await callback.message.answer("Оберіть дію:", reply_markup=MAIN_MENU)
 
     # Notify admins
     admin_text = (
-        f"📌 <b>Новая запись</b>\n\n"
-        f"Клиент: {callback.from_user.full_name} (@{callback.from_user.username or '—'})\n"
-        f"Услуга: {data['service_name']}\n"
-        f"Мастер: {data['master_name']}\n"
-        f"Дата: {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}\n"
-        f"Цена: {data['price']} руб"
+        f"📌 <b>Новий запис</b>\n\n"
+        f"Клієнт: {callback.from_user.full_name} (@{callback.from_user.username or '—'})\n"
+        f"Послуга: {data['service_name']}\n"
+        f"Майстер: {data['master_name']}\n"
+        f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
+        f"Ціна: {data['price']} грн"
     )
     for admin_id in settings.admin_ids:
         try:
@@ -430,8 +427,8 @@ async def on_cancel_booking_fsm(
 ) -> None:
     await state.clear()
     await callback.answer()
-    await callback.message.edit_text("Запись отменена.")
-    await callback.message.answer("Выберите действие:", reply_markup=MAIN_MENU)
+    await callback.message.edit_text("Запис скасовано.")
+    await callback.message.answer("Оберіть дію:", reply_markup=MAIN_MENU)
 
 
 @router.callback_query(BookingFSM.choosing_time, F.data == "back_to_date")
@@ -456,4 +453,4 @@ async def back_to_date(
 async def fallback(message: Message, state: FSMContext) -> None:
     current = await state.get_state()
     if current is None:
-        await message.answer("Выберите действие:", reply_markup=MAIN_MENU)
+        await message.answer("Оберіть дію:", reply_markup=MAIN_MENU)

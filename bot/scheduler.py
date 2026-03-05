@@ -33,7 +33,7 @@ def _fmt(dt: datetime) -> str:
     local = (
         dt.astimezone(tz) if dt.tzinfo else dt.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
     )
-    return local.strftime("%d.%m.%Y в %H:%M")
+    return local.strftime("%d.%m.%Y о %H:%M")
 
 
 async def send_24h_reminders(bot, session_factory: async_sessionmaker[AsyncSession]) -> None:
@@ -49,22 +49,20 @@ async def send_24h_reminders(bot, session_factory: async_sessionmaker[AsyncSessi
         start_utc = _to_utc_naive(r["start_time"])
         now = datetime.utcnow()
 
-        # Mark FIRST (optimistic — prevents duplicates on restart)
-        async with session_factory() as session:
-            await mark_24h_reminder_sent(session, r["id"])
-            await session.commit()
-
         if start_utc < now - _OVERDUE_THRESHOLD:
             logger.info("24h reminder overdue, skipped: booking %s", r["id"])
+            async with session_factory() as session:
+                await mark_24h_reminder_sent(session, r["id"])
+                await session.commit()
             continue
 
         text = (
-            f"⏰ <b>Напоминание о записи</b>\n\n"
+            f"⏰ <b>Нагадування про запис</b>\n\n"
             f"💇 {r['service_name']}\n"
             f"👤 {r['master_name']}\n"
             f"📅 {_fmt(r['start_time'])}\n"
-            f"💰 {int(r['price_at_booking'])} руб\n\n"
-            "Ждём вас завтра!"
+            f"💰 {int(r['price_at_booking'])} грн\n\n"
+            "Чекаємо на вас завтра!"
         )
         try:
             await bot.send_message(
@@ -72,6 +70,9 @@ async def send_24h_reminders(bot, session_factory: async_sessionmaker[AsyncSessi
                 text,
                 reply_markup=reminder_24h_keyboard(str(r["id"])),
             )
+            async with session_factory() as session:
+                await mark_24h_reminder_sent(session, r["id"])
+                await session.commit()
         except Exception as e:
             logger.warning("Failed to send 24h reminder to %s: %s", r["client_telegram_id"], e)
 
@@ -87,23 +88,25 @@ async def send_2h_reminders(bot, session_factory: async_sessionmaker[AsyncSessio
         start_utc = _to_utc_naive(r["start_time"])
         now = datetime.utcnow()
 
-        async with session_factory() as session:
-            await mark_2h_reminder_sent(session, r["id"])
-            await session.commit()
-
         if start_utc < now - _OVERDUE_THRESHOLD:
             logger.info("2h reminder overdue, skipped: booking %s", r["id"])
+            async with session_factory() as session:
+                await mark_2h_reminder_sent(session, r["id"])
+                await session.commit()
             continue
 
         text = (
-            f"⏰ <b>Скоро ваша запись!</b>\n\n"
+            f"⏰ <b>Незабаром ваш запис!</b>\n\n"
             f"💇 {r['service_name']}\n"
             f"👤 {r['master_name']}\n"
             f"📅 {_fmt(r['start_time'])}\n\n"
-            "Ждём вас через ~2 часа!"
+            "Чекаємо на вас приблизно через 2 години!"
         )
         try:
             await bot.send_message(r["client_telegram_id"], text)
+            async with session_factory() as session:
+                await mark_2h_reminder_sent(session, r["id"])
+                await session.commit()
         except Exception as e:
             logger.warning("Failed to send 2h reminder to %s: %s", r["client_telegram_id"], e)
 
@@ -120,15 +123,10 @@ async def send_review_requests(bot, session_factory: async_sessionmaker[AsyncSes
         if r["client_telegram_id"] is None:
             continue
 
-        # Mark FIRST (also sets status=completed)
-        async with session_factory() as session:
-            await mark_review_requested(session, r["id"])
-            await session.commit()
-
         text = (
-            f"Как прошёл визит?\n\n"
+            f"Як пройшов візит?\n\n"
             f"💇 {r['service_name']}\n\n"
-            "Оцените, пожалуйста:"
+            "Оцініть, будь ласка:"
         )
         try:
             await bot.send_message(
@@ -136,6 +134,9 @@ async def send_review_requests(bot, session_factory: async_sessionmaker[AsyncSes
                 text,
                 reply_markup=review_request_keyboard(str(r["id"])),
             )
+            async with session_factory() as session:
+                await mark_review_requested(session, r["id"])
+                await session.commit()
         except Exception as e:
             logger.warning("Failed to send review request to %s: %s", r["client_telegram_id"], e)
 

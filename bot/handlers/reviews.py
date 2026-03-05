@@ -49,7 +49,7 @@ class ReviewFSM(StatesGroup):
 
 @router.callback_query(ReminderAckCD.filter())
 async def on_reminder_ack(callback: CallbackQuery) -> None:
-    await callback.answer("Ждём вас! 💇")
+    await callback.answer("Чекаємо на вас! 💇")
     await callback.message.edit_reply_markup(reply_markup=None)
 
 
@@ -66,7 +66,7 @@ async def on_reminder_cancel(
 
     start_time = await get_booking_start_time(session, booking_id)
     if start_time is None:
-        await callback.answer("Запись не найдена.", show_alert=True)
+        await callback.answer("Запис не знайдено.", show_alert=True)
         return
 
     now = datetime.utcnow()
@@ -78,7 +78,7 @@ async def on_reminder_cancel(
     deadline = start_utc - timedelta(hours=settings.cancel_deadline_hours)
     if now > deadline:
         await callback.answer(
-            f"Отмена недоступна менее чем за {settings.cancel_deadline_hours} ч до записи.",
+            f"Скасування недоступне менш ніж за {settings.cancel_deadline_hours} год до запису.",
             show_alert=True,
         )
         return
@@ -86,9 +86,9 @@ async def on_reminder_cancel(
     await cancel_booking(session, booking_id, cancelled_by="client")
     await session.commit()
 
-    await callback.answer("Запись отменена.")
+    await callback.answer("Запис скасовано.")
     await callback.message.edit_text(
-        callback.message.text + "\n\n<i>❌ Отменено</i>",
+        callback.message.text + "\n\n<i>❌ Скасовано</i>",
         reply_markup=None,
     )
 
@@ -99,9 +99,9 @@ async def on_reminder_cancel(
         else start_time.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
     )
     admin_text = (
-        f"❌ <b>Отмена записи (из напоминания)</b>\n\n"
-        f"Клиент: {callback.from_user.full_name}\n"
-        f"Дата: {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}"
+        f"❌ <b>Скасування запису (з нагадування)</b>\n\n"
+        f"Клієнт: {callback.from_user.full_name}\n"
+        f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}"
     )
     for admin_id in settings.admin_ids:
         try:
@@ -126,9 +126,9 @@ async def on_review_rating(
     stars = "⭐" * callback_data.rating
     await callback.answer()
     await callback.message.edit_text(
-        f"Оценка: {stars}\n\nНапишите комментарий или нажмите «Пропустить»:",
+        f"Оцінка: {stars}\n\nНапишіть коментар або натисніть «Пропустити»:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="Пропустить", callback_data="review_skip")
+            InlineKeyboardButton(text="Пропустити", callback_data="review_skip")
         ]]),
     )
 
@@ -167,7 +167,7 @@ async def _save_review(
     )
     client = client_result.scalar_one_or_none()
     if client is None:
-        await message.answer("Не удалось сохранить отзыв.", reply_markup=MAIN_MENU)
+        await message.answer("Не вдалося зберегти відгук.", reply_markup=MAIN_MENU)
         return
 
     await create_review(
@@ -178,7 +178,7 @@ async def _save_review(
         comment=comment,
     )
     await session.commit()
-    await message.answer("Спасибо за отзыв! 🙏", reply_markup=MAIN_MENU)
+    await message.answer("Дякуємо за відгук! 🙏", reply_markup=MAIN_MENU)
 
 
 # ── Public keyboard builders (used by scheduler) ──────────────────────────────
@@ -186,11 +186,11 @@ async def _save_review(
 def reminder_24h_keyboard(booking_id: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(
-            text="✅ Приду",
+            text="✅ Прийду",
             callback_data=ReminderAckCD(booking_id=booking_id).pack(),
         ),
         InlineKeyboardButton(
-            text="❌ Отменить",
+            text="❌ Скасувати",
             callback_data=ReminderCancelCD(booking_id=booking_id).pack(),
         ),
     ]])

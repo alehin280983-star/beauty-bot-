@@ -6,10 +6,10 @@ from datetime import date
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-MONTHS_RU = [
-    "", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"]
+MONTHS_UA = [
+    "", "Січень", "Лютий", "Березень", "Квітень", "Травень", "Червень",
+    "Липень", "Серпень", "Вересень", "Жовтень", "Листопад", "Грудень",
 ]
 
 
@@ -61,7 +61,7 @@ def calendar_keyboard(
     buttons.append([
         prev_btn,
         InlineKeyboardButton(
-            text=f"{MONTHS_RU[month]} {year}",
+            text=f"{MONTHS_UA[month]} {year}",
             callback_data=CalendarNavCD(action="ignore", year=year, month=month).pack(),
         ),
         next_btn,

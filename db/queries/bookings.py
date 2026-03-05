@@ -218,7 +218,7 @@ async def get_pending_review_requests(
         .correlate(Booking)
         .scalar_subquery()
     )
-    end_time_expr = start_subq + func.make_interval(mins=Service.duration_min)
+    end_time_expr = start_subq + func.make_interval(0, 0, 0, 0, 0, Service.duration_min)
 
     result = await session.execute(
         select(
