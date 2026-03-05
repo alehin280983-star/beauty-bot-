@@ -8,6 +8,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 
 from bot.handlers import admin, client, my_bookings, reviews
 from bot.middlewares.db import DbSessionMiddleware
+from bot.middlewares.error_handler import ErrorHandlerMiddleware
 from bot.scheduler import setup_scheduler
 from config import settings
 from db.session import AsyncSessionFactory
@@ -24,6 +25,7 @@ async def main() -> None:
     storage = RedisStorage.from_url(settings.redis_url)
     dp = Dispatcher(storage=storage)
 
+    dp.update.middleware(ErrorHandlerMiddleware())
     dp.update.middleware(DbSessionMiddleware(AsyncSessionFactory))
 
     dp.include_router(admin.router)
