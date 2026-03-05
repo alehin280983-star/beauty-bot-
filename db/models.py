@@ -104,7 +104,7 @@ class Slot(Base):
     booking: Mapped[Optional["Booking"]] = relationship("Booking", back_populates="slots")
 
     __table_args__ = (
-        Index("ix_slots_master_starts_at", "master_id", "starts_at"),
+        Index("ix_slots_master_starts_at", "master_id", "starts_at", unique=True),
         Index("ix_slots_booking_id", "booking_id"),
     )
 

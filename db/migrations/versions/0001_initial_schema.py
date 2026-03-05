@@ -105,7 +105,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["booking_id"], ["bookings.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_slots_master_starts_at", "slots", ["master_id", "starts_at"])
+    op.create_index("ix_slots_master_starts_at", "slots", ["master_id", "starts_at"], unique=True)
     op.create_index("ix_slots_booking_id", "slots", ["booking_id"])
 
     op.create_table(
