@@ -6,7 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 
-from bot.handlers import client, my_bookings
+from bot.handlers import admin, client, my_bookings
 from bot.middlewares.db import DbSessionMiddleware
 from config import settings
 from db.session import AsyncSessionFactory
@@ -25,6 +25,7 @@ async def main() -> None:
 
     dp.update.middleware(DbSessionMiddleware(AsyncSessionFactory))
 
+    dp.include_router(admin.router)
     dp.include_router(my_bookings.router)
     dp.include_router(client.router)
 
