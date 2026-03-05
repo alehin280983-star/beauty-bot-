@@ -23,22 +23,22 @@ async def create_booking(
     service_price: Decimal,
     step_min: int,
 ) -> Booking:
-    """Atomic multi-slot booking. Raises SlotAlreadyTaken or NotEnoughSlots on conflict."""
-    async with session.begin():
-        slots = await lock_slots_for_booking(
-            session, master_id, slot_start, service_duration, step_min
-        )
-        booking = Booking(
-            client_id=client_id,
-            master_id=master_id,
-            service_id=service_id,
-            status=BookingStatus.confirmed,
-            price_at_booking=service_price,
-        )
-        session.add(booking)
-        await session.flush()
-        for slot in slots:
-            slot.booking_id = booking.id
+    """Atomic multi-slot booking. Raises SlotAlreadyTaken or NotEnoughSlots on conflict.
+    Caller is responsible for commit/rollback."""
+    slots = await lock_slots_for_booking(
+        session, master_id, slot_start, service_duration, step_min
+    )
+    booking = Booking(
+        client_id=client_id,
+        master_id=master_id,
+        service_id=service_id,
+        status=BookingStatus.confirmed,
+        price_at_booking=service_price,
+    )
+    session.add(booking)
+    await session.flush()
+    for slot in slots:
+        slot.booking_id = booking.id
     return booking
 
 
@@ -47,19 +47,19 @@ async def cancel_booking(
     booking_id: uuid.UUID,
     cancelled_by: str,
 ) -> Booking:
-    """Cancel booking and release all slots. No deadline check — that's the handler's job."""
+    """Cancel booking and release all slots. No deadline check — that's the handler's job.
+    Caller is responsible for commit."""
     status = (
         BookingStatus.cancelled_client
         if cancelled_by == "client"
         else BookingStatus.cancelled_admin
     )
-    async with session.begin():
-        result = await session.execute(
-            select(Booking).where(Booking.id == booking_id)
-        )
-        booking = result.scalar_one()
-        booking.status = status
-        await release_slots(session, booking_id)
+    result = await session.execute(
+        select(Booking).where(Booking.id == booking_id)
+    )
+    booking = result.scalar_one()
+    booking.status = status
+    await release_slots(session, booking_id)
     return booking
 
 

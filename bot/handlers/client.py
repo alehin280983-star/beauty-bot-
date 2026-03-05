@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -22,6 +23,8 @@ from bot.keyboards.booking import (
 from bot.keyboards.calendar import CalendarNavCD, DateCD, calendar_keyboard
 from bot.keyboards.main_menu import MAIN_MENU
 from config import settings
+from db.models import Client
+from db.queries.bookings import NotEnoughSlots, SlotAlreadyTaken, create_booking
 from db.queries.clients import get_or_create_client
 from db.queries.masters import get_masters_for_service
 from db.queries.services import get_visible_services
@@ -336,6 +339,99 @@ def _confirm_keyboard():
             InlineKeyboardButton(text="❌ Отменить", callback_data="cancel_booking_fsm"),
         ]
     ])
+
+
+# ── Подтверждение / отмена FSM ────────────────────────────────────────────────
+
+@router.callback_query(BookingFSM.confirming, F.data == "confirm_booking")
+async def on_confirm_booking(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    state: FSMContext,
+    bot: Bot,
+) -> None:
+    data = await state.get_data()
+    from sqlalchemy import select as sa_select
+    client_result = await session.execute(
+        sa_select(Client).where(Client.telegram_id == callback.from_user.id)
+    )
+    client = client_result.scalar_one()
+
+    slot_start = datetime.fromisoformat(data["slot_start"])
+    try:
+        booking = await create_booking(
+            session,
+            client_id=client.id,
+            master_id=uuid.UUID(data["master_id"]),
+            service_id=uuid.UUID(data["service_id"]),
+            slot_start=slot_start,
+            service_duration=data["duration_min"],
+            service_price=Decimal(data["price"]),
+            step_min=30,
+        )
+        await session.commit()
+    except (SlotAlreadyTaken, NotEnoughSlots):
+        await session.rollback()
+        await callback.answer("Это время уже занято. Выберите другое.", show_alert=True)
+        # Return to time selection keeping service/master/date
+        chosen_date = date.fromisoformat(data["chosen_date"])
+        master_id = uuid.UUID(data["master_id"])
+        slots = await get_available_slots(
+            session, master_id, chosen_date, data["duration_min"], 30
+        )
+        await state.set_state(BookingFSM.choosing_time)
+        tz = ZoneInfo(settings.studio_timezone)
+        await callback.message.edit_text(
+            f"Услуга: <b>{data['service_name']}</b>\n"
+            f"Мастер: <b>{data['master_name']}</b>\n"
+            f"Дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\n"
+            "Выберите время:",
+            reply_markup=time_slots_keyboard(slots, tz),
+        )
+        return
+
+    await state.clear()
+
+    tz = ZoneInfo(settings.studio_timezone)
+    if slot_start.tzinfo:
+        local = slot_start.astimezone(tz)
+    else:
+        local = slot_start.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+
+    await callback.answer("Запись подтверждена! ✅")
+    await callback.message.edit_text(
+        f"✅ <b>Запись создана!</b>\n\n"
+        f"💇 {data['service_name']}\n"
+        f"👤 {data['master_name']}\n"
+        f"📅 {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}\n"
+        f"💰 {data['price']} руб"
+    )
+    await callback.message.answer("Выберите действие:", reply_markup=MAIN_MENU)
+
+    # Notify admins
+    admin_text = (
+        f"📌 <b>Новая запись</b>\n\n"
+        f"Клиент: {callback.from_user.full_name} (@{callback.from_user.username or '—'})\n"
+        f"Услуга: {data['service_name']}\n"
+        f"Мастер: {data['master_name']}\n"
+        f"Дата: {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}\n"
+        f"Цена: {data['price']} руб"
+    )
+    for admin_id in settings.admin_ids:
+        try:
+            await bot.send_message(admin_id, admin_text)
+        except Exception:
+            pass
+
+
+@router.callback_query(BookingFSM.confirming, F.data == "cancel_booking_fsm")
+async def on_cancel_booking_fsm(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    await state.clear()
+    await callback.answer()
+    await callback.message.edit_text("Запись отменена.")
+    await callback.message.answer("Выберите действие:", reply_markup=MAIN_MENU)
 
 
 @router.callback_query(BookingFSM.choosing_time, F.data == "back_to_date")
