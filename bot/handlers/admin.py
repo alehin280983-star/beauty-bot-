@@ -18,8 +18,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from zoneinfo import ZoneInfo
 
 from bot.filters import AdminFilter
+from bot.keyboards.calendar import CalendarNavCD, DateCD, calendar_keyboard
+from bot.keyboards.booking import TimeCD, time_slots_keyboard
 from config import settings
-from db.queries.bookings import get_bookings_for_date
+from db.queries.bookings import create_booking, get_bookings_for_date
+from db.exceptions import NotEnoughSlots, SlotAlreadyTaken
+from db.queries.clients import create_phone_client, find_client_by_phone
 from db.queries.masters import (
     create_master,
     get_active_masters,
@@ -33,7 +37,7 @@ from db.queries.services import (
     toggle_service_visible,
     update_service,
 )
-from db.queries.slots import block_slot, generate_slots, get_slots_for_date
+from db.queries.slots import block_slot, generate_slots, get_available_slots, get_dates_with_available_slots, get_slots_for_date
 
 router = Router()
 router.message.filter(AdminFilter())
@@ -87,6 +91,25 @@ class AdminMasterServiceFSM(StatesGroup):
     choosing_service = State()
 
 
+class AdminBookFSM(StatesGroup):
+    choosing_master = State()
+    choosing_service = State()
+    choosing_date = State()
+    choosing_time = State()
+    entering_name = State()
+    entering_phone = State()
+
+
+# ── CallbackData for admin_book ───────────────────────────────────────────────
+
+class AdminBookMasterCD(CallbackData, prefix="ab_m"):
+    master_id: str
+
+
+class AdminBookServiceCD(CallbackData, prefix="ab_s"):
+    service_id: str
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _tz() -> ZoneInfo:
@@ -122,7 +145,8 @@ async def cmd_admin(message: Message) -> None:
         "/admin_slots — генерация слотов\n"
         "/admin_services — управление услугами\n"
         "/admin_masters — управление мастерами\n"
-        "/admin_reviews — последние отзывы"
+        "/admin_reviews — последние отзывы\n"
+        "/admin_book — ручная запись клиента"
     )
 
 
@@ -608,3 +632,221 @@ async def cmd_admin_reviews(message: Message, session: AsyncSession) -> None:
         comment = r.comment or "—"
         lines.append(f"{stars}\n{comment}\n")
     await message.answer("\n".join(lines))
+
+
+# ── /admin_book ────────────────────────────────────────────────────────────────
+
+@router.message(Command("admin_book"))
+async def cmd_admin_book(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    await state.clear()
+    masters = await get_active_masters(session)
+    if not masters:
+        await message.answer("Нет активных мастеров.")
+        return
+    buttons = [
+        [InlineKeyboardButton(
+            text=m.name,
+            callback_data=AdminBookMasterCD(master_id=str(m.id)).pack(),
+        )]
+        for m in masters
+    ]
+    await state.set_state(AdminBookFSM.choosing_master)
+    await message.answer("Выберите мастера:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(AdminBookFSM.choosing_master, AdminBookMasterCD.filter())
+async def admin_book_master_chosen(
+    callback: CallbackQuery,
+    callback_data: AdminBookMasterCD,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    master_id = uuid.UUID(callback_data.master_id)
+    from db.models import Master
+    from sqlalchemy import select
+    result = await session.execute(select(Master).where(Master.id == master_id))
+    master = result.scalar_one()
+
+    from db.models import MasterService, Service
+    svc_result = await session.execute(
+        select(Service)
+        .join(MasterService, MasterService.service_id == Service.id)
+        .where(MasterService.master_id == master_id)
+        .where(Service.is_visible == True)  # noqa: E712
+        .order_by(Service.name)
+    )
+    services = list(svc_result.scalars().all())
+    if not services:
+        await callback.answer("У мастера нет услуг.", show_alert=True)
+        return
+
+    await state.update_data(master_id=str(master_id), master_name=master.name)
+    await state.set_state(AdminBookFSM.choosing_service)
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{s.name} — {s.duration_min} мин — {int(s.price)} руб",
+            callback_data=AdminBookServiceCD(service_id=str(s.id)).pack(),
+        )]
+        for s in services
+    ]
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Мастер: <b>{master.name}</b>\n\nВыберите услугу:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+@router.callback_query(AdminBookFSM.choosing_service, AdminBookServiceCD.filter())
+async def admin_book_service_chosen(
+    callback: CallbackQuery,
+    callback_data: AdminBookServiceCD,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    service_id = uuid.UUID(callback_data.service_id)
+    from db.models import Service
+    from sqlalchemy import select
+    result = await session.execute(select(Service).where(Service.id == service_id))
+    service = result.scalar_one()
+
+    await state.update_data(
+        service_id=str(service_id),
+        service_name=service.name,
+        duration_min=service.duration_min,
+        price=str(service.price),
+    )
+
+    data = await state.get_data()
+    master_id = uuid.UUID(data["master_id"])
+    today = date.today()
+    max_date = today + timedelta(days=29)
+
+    available = await get_dates_with_available_slots(session, master_id, service.duration_min, 30)
+    await state.update_data(available_dates=[d.isoformat() for d in available])
+    await state.set_state(AdminBookFSM.choosing_date)
+
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Мастер: <b>{data['master_name']}</b>\n"
+        f"Услуга: <b>{service.name}</b>\n\n"
+        "Выберите дату:",
+        reply_markup=calendar_keyboard(today.year, today.month, set(available), today, max_date),
+    )
+
+
+@router.callback_query(AdminBookFSM.choosing_date, CalendarNavCD.filter())
+async def admin_book_cal_nav(
+    callback: CallbackQuery, callback_data: CalendarNavCD, state: FSMContext
+) -> None:
+    if callback_data.action == "ignore":
+        await callback.answer()
+        return
+    data = await state.get_data()
+    available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
+    today = date.today()
+    max_date = today + timedelta(days=29)
+    await callback.answer()
+    await callback.message.edit_reply_markup(
+        reply_markup=calendar_keyboard(
+            callback_data.year, callback_data.month, available, today, max_date
+        )
+    )
+
+
+@router.callback_query(AdminBookFSM.choosing_date, DateCD.filter())
+async def admin_book_date_chosen(
+    callback: CallbackQuery,
+    callback_data: DateCD,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    chosen_date = date.fromisoformat(callback_data.date)
+    data = await state.get_data()
+    available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
+
+    if chosen_date not in available:
+        await callback.answer("На эту дату нет свободного времени.")
+        return
+
+    master_id = uuid.UUID(data["master_id"])
+    slots = await get_available_slots(session, master_id, chosen_date, data["duration_min"], 30)
+    if not slots:
+        await callback.answer("Слоты заняты, выберите другую дату.")
+        return
+
+    await state.update_data(chosen_date=chosen_date.isoformat())
+    await state.set_state(AdminBookFSM.choosing_time)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Мастер: <b>{data['master_name']}</b>\n"
+        f"Услуга: <b>{data['service_name']}</b>\n"
+        f"Дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\n"
+        "Выберите время:",
+        reply_markup=time_slots_keyboard(slots, _tz()),
+    )
+
+
+@router.callback_query(AdminBookFSM.choosing_time, TimeCD.filter())
+async def admin_book_time_chosen(
+    callback: CallbackQuery, callback_data: TimeCD, state: FSMContext
+) -> None:
+    await state.update_data(slot_start=callback_data.starts_at)
+    await state.set_state(AdminBookFSM.entering_name)
+    await callback.answer()
+    await callback.message.edit_text("Введите имя клиента:")
+
+
+@router.message(AdminBookFSM.entering_name)
+async def admin_book_name_entered(message: Message, state: FSMContext) -> None:
+    await state.update_data(client_name=message.text.strip())
+    await state.set_state(AdminBookFSM.entering_phone)
+    await message.answer("Введите номер телефона клиента:")
+
+
+@router.message(AdminBookFSM.entering_phone)
+async def admin_book_phone_entered(
+    message: Message, session: AsyncSession, state: FSMContext
+) -> None:
+    from decimal import Decimal
+    phone = message.text.strip()
+    data = await state.get_data()
+    await state.clear()
+
+    # Find or create client by phone
+    client = await find_client_by_phone(session, phone)
+    if client is None:
+        client = await create_phone_client(session, phone, first_name=data["client_name"])
+
+    slot_start = datetime.fromisoformat(data["slot_start"])
+    try:
+        booking = await create_booking(
+            session,
+            client_id=client.id,
+            master_id=uuid.UUID(data["master_id"]),
+            service_id=uuid.UUID(data["service_id"]),
+            slot_start=slot_start,
+            service_duration=data["duration_min"],
+            service_price=Decimal(data["price"]),
+            step_min=30,
+        )
+        await session.commit()
+    except (SlotAlreadyTaken, NotEnoughSlots):
+        await session.rollback()
+        await message.answer("❌ Время уже занято. Начните заново с /admin_book.")
+        return
+
+    tz = _tz()
+    if slot_start.tzinfo:
+        local = slot_start.astimezone(tz)
+    else:
+        local = slot_start.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+
+    await message.answer(
+        f"✅ <b>Запись создана</b>\n\n"
+        f"Клиент: {data['client_name']} ({phone})\n"
+        f"Услуга: {data['service_name']}\n"
+        f"Мастер: {data['master_name']}\n"
+        f"Дата: {local.strftime('%d.%m.%Y')} в {local.strftime('%H:%M')}\n"
+        f"Цена: {data['price']} руб"
+    )
