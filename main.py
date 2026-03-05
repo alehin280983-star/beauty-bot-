@@ -6,8 +6,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 
-from bot.handlers import admin, client, my_bookings
+from bot.handlers import admin, client, my_bookings, reviews
 from bot.middlewares.db import DbSessionMiddleware
+from bot.scheduler import setup_scheduler
 from config import settings
 from db.session import AsyncSessionFactory
 
@@ -26,11 +27,19 @@ async def main() -> None:
     dp.update.middleware(DbSessionMiddleware(AsyncSessionFactory))
 
     dp.include_router(admin.router)
+    dp.include_router(reviews.router)
     dp.include_router(my_bookings.router)
     dp.include_router(client.router)
 
+    scheduler = setup_scheduler(bot, AsyncSessionFactory)
+    scheduler.start()
+    logger.info("Scheduler started with 3 jobs (15 min interval).")
+
     logger.info("Starting bot...")
-    await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    try:
+        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+    finally:
+        scheduler.shutdown()
 
 
 if __name__ == "__main__":
