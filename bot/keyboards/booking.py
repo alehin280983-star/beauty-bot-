@@ -26,7 +26,7 @@ def services_keyboard(services: list[Service]) -> InlineKeyboardMarkup:
     buttons = [
         [
             InlineKeyboardButton(
-                text=f"{s.name} — {s.duration_min} хв — {int(s.price)} грн",
+                text=s.name,
                 callback_data=ServiceCD(service_id=str(s.id)).pack(),
             )
         ]
