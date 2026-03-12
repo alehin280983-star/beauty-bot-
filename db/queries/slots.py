@@ -29,7 +29,9 @@ async def generate_slots(
     current = datetime(slot_date.year, slot_date.month, slot_date.day, start_hour, 0, tzinfo=_KYIV)
     end = datetime(slot_date.year, slot_date.month, slot_date.day, end_hour, 0, tzinfo=_KYIV)
     while current < end:
-        slots.append({"id": uuid.uuid4(), "master_id": master_id, "starts_at": current})
+        # Store as naive UTC (timestamptz column handles timezone correctly)
+        starts_at_utc = current.astimezone(timezone.utc).replace(tzinfo=None)
+        slots.append({"id": uuid.uuid4(), "master_id": master_id, "starts_at": starts_at_utc})
         current += timedelta(minutes=step_minutes)
 
     if not slots:
