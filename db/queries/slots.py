@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import math
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List
+from zoneinfo import ZoneInfo
+
+_KYIV = ZoneInfo("Europe/Kyiv")
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -21,10 +24,10 @@ async def generate_slots(
     end_hour: int,
     step_minutes: int,
 ) -> int:
-    """Generate slots for a master on a given date. Skips existing ones silently."""
+    """Generate slots for a master on a given date in Kyiv timezone. Skips existing ones silently."""
     slots = []
-    current = datetime(slot_date.year, slot_date.month, slot_date.day, start_hour, 0)
-    end = datetime(slot_date.year, slot_date.month, slot_date.day, end_hour, 0)
+    current = datetime(slot_date.year, slot_date.month, slot_date.day, start_hour, 0, tzinfo=_KYIV)
+    end = datetime(slot_date.year, slot_date.month, slot_date.day, end_hour, 0, tzinfo=_KYIV)
     while current < end:
         slots.append({"id": uuid.uuid4(), "master_id": master_id, "starts_at": current})
         current += timedelta(minutes=step_minutes)
@@ -44,7 +47,8 @@ async def get_slots_for_date(
     master_id: uuid.UUID,
     slot_date: date,
 ) -> List[Slot]:
-    start = datetime(slot_date.year, slot_date.month, slot_date.day, 0, 0)
+    # Query by Kyiv day boundaries converted to UTC
+    start = datetime(slot_date.year, slot_date.month, slot_date.day, 0, 0, tzinfo=_KYIV)
     end = start + timedelta(days=1)
     result = await session.execute(
         select(Slot)
@@ -62,8 +66,8 @@ async def get_slots_for_range(
     date_from: date,
     date_to: date,
 ) -> List[Slot]:
-    start = datetime(date_from.year, date_from.month, date_from.day, 0, 0)
-    end = datetime(date_to.year, date_to.month, date_to.day, 0, 0) + timedelta(days=1)
+    start = datetime(date_from.year, date_from.month, date_from.day, 0, 0, tzinfo=_KYIV)
+    end = datetime(date_to.year, date_to.month, date_to.day, 0, 0, tzinfo=_KYIV) + timedelta(days=1)
     result = await session.execute(
         select(Slot)
         .where(Slot.master_id == master_id)
@@ -83,10 +87,14 @@ async def get_available_slots(
 ) -> List[Slot]:
     all_slots = await get_slots_for_date(session, master_id, slot_date)
     slots_needed = max(1, math.ceil(service_duration_min / step_min))
+    now_utc = datetime.now(timezone.utc)
 
     available = []
     for i, slot in enumerate(all_slots):
         if slot.booking_id is not None or slot.is_blocked:
+            continue
+        slot_dt = slot.starts_at if slot.starts_at.tzinfo else slot.starts_at.replace(tzinfo=timezone.utc)
+        if slot_dt <= now_utc:
             continue
         window = all_slots[i : i + slots_needed]
         if len(window) < slots_needed:
@@ -108,18 +116,24 @@ async def get_dates_with_available_slots(
     all_slots = await get_slots_for_range(session, master_id, today, date_to)
 
     slots_needed = max(1, math.ceil(service_duration_min / step_min))
+    now_utc = datetime.now(timezone.utc)
 
-    # Group by date
+    # Group by Kyiv date so calendar matches local time
     from collections import defaultdict
     slots_by_date: dict[date, List[Slot]] = defaultdict(list)
     for slot in all_slots:
-        slots_by_date[slot.starts_at.date()].append(slot)
+        slot_dt = slot.starts_at if slot.starts_at.tzinfo else slot.starts_at.replace(tzinfo=timezone.utc)
+        kyiv_date = slot_dt.astimezone(_KYIV).date()
+        slots_by_date[kyiv_date].append(slot)
 
     available_dates = []
     for d in sorted(slots_by_date.keys()):
-        day_slots = slots_by_date[d]  # already ordered from DB
+        day_slots = slots_by_date[d]
         for i, slot in enumerate(day_slots):
             if slot.booking_id is not None or slot.is_blocked:
+                continue
+            slot_dt = slot.starts_at if slot.starts_at.tzinfo else slot.starts_at.replace(tzinfo=timezone.utc)
+            if slot_dt <= now_utc:
                 continue
             window = day_slots[i : i + slots_needed]
             if len(window) < slots_needed:
