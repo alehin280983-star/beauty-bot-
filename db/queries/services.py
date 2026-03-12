@@ -7,7 +7,18 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import Service
+from db.models import MasterService, Service
+
+
+async def get_services_for_master(session: AsyncSession, master_id: uuid.UUID) -> List[Service]:
+    result = await session.execute(
+        select(Service)
+        .join(MasterService, MasterService.service_id == Service.id)
+        .where(MasterService.master_id == master_id)
+        .where(Service.is_visible == True)
+        .order_by(Service.name)
+    )
+    return list(result.scalars().all())
 
 
 async def get_visible_services(session: AsyncSession) -> List[Service]:

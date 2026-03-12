@@ -26,8 +26,8 @@ from config import settings
 from db.models import Client
 from db.queries.bookings import NotEnoughSlots, SlotAlreadyTaken, create_booking
 from db.queries.clients import get_or_create_client
-from db.queries.masters import get_masters_for_service
-from db.queries.services import get_visible_services
+from db.queries.masters import get_active_masters
+from db.queries.services import get_services_for_master
 from db.queries.slots import get_available_slots, get_dates_with_available_slots
 
 router = Router()
@@ -82,17 +82,49 @@ async def cmd_about(message: Message) -> None:
     )
 
 
-# ── Записатись: вибір послуги ─────────────────────────────────────────────────
+# ── Записатись: вибір майстра ─────────────────────────────────────────────────
 
 @router.message(F.text == "📋 Записатись")
 async def cmd_book(message: Message, session: AsyncSession, state: FSMContext) -> None:
-    services = await get_visible_services(session)
-    if not services:
-        await message.answer("Послуги ще не додано.", reply_markup=MAIN_MENU)
+    masters = await get_active_masters(session)
+    if not masters:
+        await message.answer("Майстри ще не додані.", reply_markup=MAIN_MENU)
         return
-    await state.set_state(BookingFSM.choosing_service)
-    await message.answer("Оберіть послугу:", reply_markup=services_keyboard(services))
+    await state.set_state(BookingFSM.choosing_master)
+    await message.answer("Оберіть майстра:", reply_markup=masters_keyboard(masters))
 
+
+@router.callback_query(BookingFSM.choosing_master, MasterCD.filter())
+async def on_master_chosen(
+    callback: CallbackQuery,
+    callback_data: MasterCD,
+    session: AsyncSession,
+    state: FSMContext,
+) -> None:
+    master_id = uuid.UUID(callback_data.master_id)
+    masters = await get_active_masters(session)
+    master = next((m for m in masters if m.id == master_id), None)
+    if master is None:
+        await callback.answer("Майстер недоступний. Почніть спочатку.")
+        await state.clear()
+        return
+
+    await state.update_data(master_id=str(master.id), master_name=master.name)
+
+    services = await get_services_for_master(session, master_id)
+    if not services:
+        await callback.answer("Немає послуг для цього майстра.")
+        return
+
+    await callback.answer()
+    await state.set_state(BookingFSM.choosing_service)
+    await callback.message.edit_text(
+        f"Майстер: <b>{master.name}</b>\n\nОберіть послугу:",
+        reply_markup=services_keyboard(services),
+    )
+
+
+# ── Вибір послуги ─────────────────────────────────────────────────────────────
 
 @router.callback_query(BookingFSM.choosing_service, ServiceCD.filter())
 async def on_service_chosen(
@@ -101,8 +133,11 @@ async def on_service_chosen(
     session: AsyncSession,
     state: FSMContext,
 ) -> None:
+    data = await state.get_data()
+    master_id = uuid.UUID(data["master_id"])
     service_id = uuid.UUID(callback_data.service_id)
-    services = await get_visible_services(session)
+
+    services = await get_services_for_master(session, master_id)
     service = next((s for s in services if s.id == service_id), None)
     if service is None:
         await callback.answer("Послуга недоступна. Почніть спочатку.")
@@ -115,64 +150,22 @@ async def on_service_chosen(
         duration_min=service.duration_min,
         price=str(service.price),
     )
-
-    masters = await get_masters_for_service(session, service_id)
-    if not masters:
-        await callback.answer("Немає доступних майстрів для цієї послуги.")
-        return
-
-    await callback.answer()
-
-    if len(masters) == 1:
-        # Auto-select single master
-        master = masters[0]
-        await state.update_data(master_id=str(master.id), master_name=master.name)
-        await _show_calendar(callback.message, session, state, service.duration_min, service.id, master.id, edit=True)
-    else:
-        await state.set_state(BookingFSM.choosing_master)
-        await callback.message.edit_text(
-            f"Послуга: <b>{service.name}</b>\n\nОберіть майстра:",
-            reply_markup=masters_keyboard(masters),
-        )
-
-
-# ── Вибір майстра ─────────────────────────────────────────────────────────────
-
-@router.callback_query(BookingFSM.choosing_master, MasterCD.filter())
-async def on_master_chosen(
-    callback: CallbackQuery,
-    callback_data: MasterCD,
-    session: AsyncSession,
-    state: FSMContext,
-) -> None:
-    master_id = uuid.UUID(callback_data.master_id)
-    data = await state.get_data()
-    service_id = uuid.UUID(data["service_id"])
-
-    masters = await get_masters_for_service(session, service_id)
-    master = next((m for m in masters if m.id == master_id), None)
-    if master is None:
-        await callback.answer("Майстер недоступний. Почніть спочатку.")
-        await state.clear()
-        return
-
-    await state.update_data(master_id=str(master.id), master_name=master.name)
     await callback.answer()
     await _show_calendar(
         callback.message, session, state,
-        data["duration_min"], service_id, master_id, edit=True,
+        service.duration_min, service_id, master_id, edit=True,
     )
 
 
-@router.callback_query(BookingFSM.choosing_master, F.data == "back_to_service")
-async def back_to_service(
+@router.callback_query(BookingFSM.choosing_service, F.data == "back_to_master")
+async def back_to_master_from_service(
     callback: CallbackQuery, session: AsyncSession, state: FSMContext
 ) -> None:
-    services = await get_visible_services(session)
-    await state.set_state(BookingFSM.choosing_service)
+    masters = await get_active_masters(session)
+    await state.set_state(BookingFSM.choosing_master)
     await callback.answer()
     await callback.message.edit_text(
-        "Оберіть послугу:", reply_markup=services_keyboard(services)
+        "Оберіть майстра:", reply_markup=masters_keyboard(masters)
     )
 
 
@@ -273,29 +266,19 @@ async def on_date_chosen(
     )
 
 
-@router.callback_query(BookingFSM.choosing_date, F.data == "back_to_master")
-async def back_to_master_from_date(
+@router.callback_query(BookingFSM.choosing_date, F.data == "back_to_service")
+async def back_to_service_from_date(
     callback: CallbackQuery, session: AsyncSession, state: FSMContext
 ) -> None:
     data = await state.get_data()
-    service_id = uuid.UUID(data["service_id"])
-    masters = await get_masters_for_service(session, service_id)
-
-    if len(masters) == 1:
-        # Skip master step, go back to service
-        services = await get_visible_services(session)
-        await state.set_state(BookingFSM.choosing_service)
-        await callback.answer()
-        await callback.message.edit_text(
-            "Оберіть послугу:", reply_markup=services_keyboard(services)
-        )
-    else:
-        await state.set_state(BookingFSM.choosing_master)
-        await callback.answer()
-        await callback.message.edit_text(
-            f"Послуга: <b>{data['service_name']}</b>\n\nОберіть майстра:",
-            reply_markup=masters_keyboard(masters),
-        )
+    master_id = uuid.UUID(data["master_id"])
+    services = await get_services_for_master(session, master_id)
+    await state.set_state(BookingFSM.choosing_service)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Майстер: <b>{data['master_name']}</b>\n\nОберіть послугу:",
+        reply_markup=services_keyboard(services),
+    )
 
 
 # ── Вибір часу ────────────────────────────────────────────────────────────────

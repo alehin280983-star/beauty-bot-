@@ -32,6 +32,7 @@ def services_keyboard(services: list[Service]) -> InlineKeyboardMarkup:
         ]
         for s in services
     ]
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_master")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -45,9 +46,6 @@ def masters_keyboard(masters: list[Master]) -> InlineKeyboardMarkup:
         ]
         for m in masters
     ]
-    buttons.append(
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_service")]
-    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

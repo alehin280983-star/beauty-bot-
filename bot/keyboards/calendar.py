@@ -106,6 +106,6 @@ def calendar_keyboard(
         buttons.append(row)
 
     buttons.append([
-        InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_master")
+        InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_service")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
