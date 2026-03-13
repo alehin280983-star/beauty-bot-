@@ -184,6 +184,61 @@ async def lock_slots_for_booking(
     return slots
 
 
+async def block_slots_range(
+    session: AsyncSession,
+    master_id: uuid.UUID,
+    slot_date: date,
+    from_hour: int,
+    to_hour: int,
+) -> int:
+    """Block all free slots for master in [from_hour, to_hour) on given date. Returns count."""
+    from_kyiv = datetime(slot_date.year, slot_date.month, slot_date.day, from_hour, 0, tzinfo=_KYIV)
+    to_kyiv = datetime(slot_date.year, slot_date.month, slot_date.day, to_hour, 0, tzinfo=_KYIV)
+    from_utc = from_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+    to_utc = to_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+
+    result = await session.execute(
+        select(Slot)
+        .where(Slot.master_id == master_id)
+        .where(Slot.starts_at >= from_utc)
+        .where(Slot.starts_at < to_utc)
+        .where(Slot.booking_id.is_(None))
+    )
+    slots = list(result.scalars().all())
+    for slot in slots:
+        slot.is_blocked = True
+    await session.flush()
+    return len(slots)
+
+
+async def unblock_slots_range(
+    session: AsyncSession,
+    master_id: uuid.UUID,
+    slot_date: date,
+    from_hour: int,
+    to_hour: int,
+) -> int:
+    """Unblock slots for master in [from_hour, to_hour) on given date. Returns count."""
+    from_kyiv = datetime(slot_date.year, slot_date.month, slot_date.day, from_hour, 0, tzinfo=_KYIV)
+    to_kyiv = datetime(slot_date.year, slot_date.month, slot_date.day, to_hour, 0, tzinfo=_KYIV)
+    from_utc = from_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+    to_utc = to_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+
+    result = await session.execute(
+        select(Slot)
+        .where(Slot.master_id == master_id)
+        .where(Slot.starts_at >= from_utc)
+        .where(Slot.starts_at < to_utc)
+        .where(Slot.is_blocked == True)  # noqa: E712
+        .where(Slot.booking_id.is_(None))
+    )
+    slots = list(result.scalars().all())
+    for slot in slots:
+        slot.is_blocked = False
+    await session.flush()
+    return len(slots)
+
+
 async def release_slots(session: AsyncSession, booking_id: uuid.UUID) -> None:
     await session.execute(
         update(Slot)

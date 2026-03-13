@@ -37,7 +37,7 @@ from db.queries.services import (
     toggle_service_visible,
     update_service,
 )
-from db.queries.slots import block_slot, generate_slots, get_available_slots, get_dates_with_available_slots, get_slots_for_date
+from db.queries.slots import block_slot, block_slots_range, generate_slots, get_available_slots, get_dates_with_available_slots, get_slots_for_date, unblock_slots_range
 
 router = Router()
 router.message.filter(AdminFilter())
@@ -100,6 +100,18 @@ class AdminBookFSM(StatesGroup):
     entering_phone = State()
 
 
+class AdminBlockFSM(StatesGroup):
+    choosing_master = State()
+    choosing_date = State()
+    entering_range = State()
+
+
+class AdminUnblockFSM(StatesGroup):
+    choosing_master = State()
+    choosing_date = State()
+    entering_range = State()
+
+
 # ── CallbackData for admin_book ───────────────────────────────────────────────
 
 class AdminBookMasterCD(CallbackData, prefix="ab_m"):
@@ -108,6 +120,11 @@ class AdminBookMasterCD(CallbackData, prefix="ab_m"):
 
 class AdminBookServiceCD(CallbackData, prefix="ab_s"):
     service_id: str
+
+
+class AdminBlockMasterCD(CallbackData, prefix="abl_m"):
+    master_id: str
+    action: str  # block | unblock
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -143,6 +160,8 @@ async def cmd_admin(message: Message) -> None:
         "/admin_today — записи на сьогодні\n"
         "/admin_tomorrow — записи на завтра\n"
         "/admin_slots — генерація слотів\n"
+        "/admin_block — заблокувати години майстра\n"
+        "/admin_unblock — розблокувати години майстра\n"
         "/admin_services — управління послугами\n"
         "/admin_masters — управління майстрами\n"
         "/admin_reviews — останні відгуки\n"
@@ -791,7 +810,9 @@ async def admin_book_date_chosen(
 async def admin_book_time_chosen(
     callback: CallbackQuery, callback_data: TimeCD, state: FSMContext
 ) -> None:
-    await state.update_data(slot_start=callback_data.starts_at)
+    from datetime import timezone as _tz_utc
+    dt_utc = datetime.fromtimestamp(callback_data.ts, tz=_tz_utc.utc)
+    await state.update_data(slot_start=dt_utc.isoformat())
     await state.set_state(AdminBookFSM.entering_name)
     await callback.answer()
     await callback.message.edit_text("Введіть ім'я клієнта:")
@@ -849,4 +870,140 @@ async def admin_book_phone_entered(
         f"Майстер: {data['master_name']}\n"
         f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
         f"Ціна: {data['price']} грн"
+    )
+
+
+# ── /admin_block ───────────────────────────────────────────────────────────────
+
+def _block_masters_keyboard(masters, action: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text=m.name,
+            callback_data=AdminBlockMasterCD(master_id=str(m.id), action=action).pack(),
+        )]
+        for m in masters
+    ])
+
+
+@router.message(Command("admin_block"))
+async def cmd_admin_block(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    masters = await get_active_masters(session)
+    if not masters:
+        await message.answer("Немає активних майстрів.")
+        return
+    await state.set_state(AdminBlockFSM.choosing_master)
+    await message.answer("Оберіть майстра для блокування:", reply_markup=_block_masters_keyboard(masters, "block"))
+
+
+@router.callback_query(AdminBlockFSM.choosing_master, AdminBlockMasterCD.filter(F.action == "block"))
+async def admin_block_master_chosen(
+    callback: CallbackQuery, callback_data: AdminBlockMasterCD, state: FSMContext
+) -> None:
+    await state.update_data(master_id=callback_data.master_id)
+    await state.set_state(AdminBlockFSM.choosing_date)
+    await callback.answer()
+    await callback.message.edit_text("Введіть дату (ДД.ММ.РРРР):")
+
+
+@router.message(AdminBlockFSM.choosing_date)
+async def admin_block_date_entered(message: Message, state: FSMContext) -> None:
+    try:
+        d = datetime.strptime(message.text.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer("Невірний формат. Введіть дату як ДД.ММ.РРРР:")
+        return
+    await state.update_data(slot_date=d.isoformat())
+    await state.set_state(AdminBlockFSM.entering_range)
+    await message.answer(
+        "Введіть діапазон годин через пробіл.\n"
+        "Наприклад: <code>10 14</code> — заблокує з 10:00 до 14:00"
+    )
+
+
+@router.message(AdminBlockFSM.entering_range)
+async def admin_block_range_entered(
+    message: Message, session: AsyncSession, state: FSMContext
+) -> None:
+    try:
+        parts = message.text.strip().split()
+        from_h, to_h = int(parts[0]), int(parts[1])
+        if not (0 <= from_h < to_h <= 24):
+            raise ValueError
+    except (ValueError, IndexError):
+        await message.answer("Невірний формат. Введіть два числа, наприклад: <code>10 14</code>")
+        return
+
+    data = await state.get_data()
+    await state.clear()
+    master_id = uuid.UUID(data["master_id"])
+    slot_date = date.fromisoformat(data["slot_date"])
+
+    count = await block_slots_range(session, master_id, slot_date, from_h, to_h)
+    await session.commit()
+    await message.answer(
+        f"🔒 Заблоковано {count} слотів на {slot_date.strftime('%d.%m.%Y')} "
+        f"з {from_h}:00 до {to_h}:00."
+    )
+
+
+# ── /admin_unblock ─────────────────────────────────────────────────────────────
+
+@router.message(Command("admin_unblock"))
+async def cmd_admin_unblock(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    masters = await get_active_masters(session)
+    if not masters:
+        await message.answer("Немає активних майстрів.")
+        return
+    await state.set_state(AdminUnblockFSM.choosing_master)
+    await message.answer("Оберіть майстра для розблокування:", reply_markup=_block_masters_keyboard(masters, "unblock"))
+
+
+@router.callback_query(AdminUnblockFSM.choosing_master, AdminBlockMasterCD.filter(F.action == "unblock"))
+async def admin_unblock_master_chosen(
+    callback: CallbackQuery, callback_data: AdminBlockMasterCD, state: FSMContext
+) -> None:
+    await state.update_data(master_id=callback_data.master_id)
+    await state.set_state(AdminUnblockFSM.choosing_date)
+    await callback.answer()
+    await callback.message.edit_text("Введіть дату (ДД.ММ.РРРР):")
+
+
+@router.message(AdminUnblockFSM.choosing_date)
+async def admin_unblock_date_entered(message: Message, state: FSMContext) -> None:
+    try:
+        d = datetime.strptime(message.text.strip(), "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer("Невірний формат. Введіть дату як ДД.ММ.РРРР:")
+        return
+    await state.update_data(slot_date=d.isoformat())
+    await state.set_state(AdminUnblockFSM.entering_range)
+    await message.answer(
+        "Введіть діапазон годин через пробіл.\n"
+        "Наприклад: <code>10 14</code> — розблокує з 10:00 до 14:00"
+    )
+
+
+@router.message(AdminUnblockFSM.entering_range)
+async def admin_unblock_range_entered(
+    message: Message, session: AsyncSession, state: FSMContext
+) -> None:
+    try:
+        parts = message.text.strip().split()
+        from_h, to_h = int(parts[0]), int(parts[1])
+        if not (0 <= from_h < to_h <= 24):
+            raise ValueError
+    except (ValueError, IndexError):
+        await message.answer("Невірний формат. Введіть два числа, наприклад: <code>10 14</code>")
+        return
+
+    data = await state.get_data()
+    await state.clear()
+    master_id = uuid.UUID(data["master_id"])
+    slot_date = date.fromisoformat(data["slot_date"])
+
+    count = await unblock_slots_range(session, master_id, slot_date, from_h, to_h)
+    await session.commit()
+    await message.answer(
+        f"🔓 Розблоковано {count} слотів на {slot_date.strftime('%d.%m.%Y')} "
+        f"з {from_h}:00 до {to_h}:00."
     )
