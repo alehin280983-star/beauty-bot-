@@ -27,7 +27,7 @@ from db.models import Client
 from db.queries.bookings import NotEnoughSlots, SlotAlreadyTaken, cancel_booking, create_booking
 from db.queries.clients import get_or_create_client, save_client_phone
 from db.queries.masters import get_active_masters
-from db.queries.services import get_services_for_master
+from db.queries.services import get_services_for_master, get_visible_services
 from db.queries.slots import get_available_slots, get_dates_with_available_slots
 
 router = Router()
@@ -70,11 +70,21 @@ async def cmd_start(message: Message, session: AsyncSession, state: FSMContext) 
 
 @router.message(F.text == "💰 Прайс")
 async def cmd_price(message: Message, session: AsyncSession) -> None:
-    services = await get_visible_services(session)
-    if not services:
+    masters = await get_active_masters(session)
+    if not masters:
         await message.answer("Послуги ще не додано.", reply_markup=MAIN_MENU)
         return
-    lines = [f"<b>{s.name}</b> — {s.duration_min} хв — {int(s.price)} грн" for s in services]
+    lines = []
+    for master in masters:
+        services = await get_services_for_master(session, master.id)
+        if not services:
+            continue
+        lines.append(f"\n<b>{master.name}</b>")
+        for s in services:
+            lines.append(f"  {s.name} — {s.duration_min} хв — {int(s.price)} грн")
+    if not lines:
+        await message.answer("Послуги ще не додано.", reply_markup=MAIN_MENU)
+        return
     await message.answer("\n".join(lines), reply_markup=MAIN_MENU)
 
 
@@ -313,7 +323,6 @@ async def on_time_chosen(
         f"👤 Майстер: {data['master_name']}\n"
         f"📅 Дата: {local.strftime('%d.%m.%Y')}\n"
         f"🕐 Час: {local.strftime('%H:%M')}\n"
-        f"💰 Ціна: {data['price']} грн\n\n"
         "Все вірно?",
         reply_markup=_confirm_keyboard(),
     )
@@ -416,8 +425,7 @@ async def _finish_booking(message, from_user, data: dict, slot_start: datetime, 
         f"✅ <b>Запис створено!</b>\n\n"
         f"💇 {data['service_name']}\n"
         f"👤 {data['master_name']}\n"
-        f"📅 {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
-        f"💰 {data['price']} грн",
+        f"📅 {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}",
         reply_markup=MAIN_MENU,
     )
 
