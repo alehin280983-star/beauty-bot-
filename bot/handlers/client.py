@@ -25,7 +25,7 @@ from bot.keyboards.main_menu import MAIN_MENU
 from config import settings
 from db.models import Client
 from db.queries.bookings import NotEnoughSlots, SlotAlreadyTaken, create_booking
-from db.queries.clients import get_or_create_client
+from db.queries.clients import get_or_create_client, save_client_phone
 from db.queries.masters import get_active_masters
 from db.queries.services import get_services_for_master
 from db.queries.slots import get_available_slots, get_dates_with_available_slots
@@ -34,8 +34,9 @@ router = Router()
 
 
 class BookingFSM(StatesGroup):
-    choosing_service = State()
+    waiting_phone = State()
     choosing_master = State()
+    choosing_service = State()
     choosing_date = State()
     choosing_time = State()
     confirming = State()
@@ -86,6 +87,44 @@ async def cmd_about(message: Message) -> None:
 
 @router.message(F.text == "📋 Записатись")
 async def cmd_book(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    from sqlalchemy import select as sa_select
+    client_result = await session.execute(
+        sa_select(Client).where(Client.telegram_id == message.from_user.id)
+    )
+    client = client_result.scalar_one_or_none()
+
+    if client is None or not client.phone:
+        await state.set_state(BookingFSM.waiting_phone)
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+        kb = ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="📱 Поділитись номером", request_contact=True)]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+        await message.answer(
+            "Для запису потрібен ваш номер телефону.\n\nНатисніть кнопку нижче:",
+            reply_markup=kb,
+        )
+        return
+
+    await _start_master_selection(message, session, state)
+
+
+@router.message(BookingFSM.waiting_phone, F.contact)
+async def on_phone_received(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    from aiogram.types import ReplyKeyboardRemove
+    phone = message.contact.phone_number
+    if not phone.startswith("+"):
+        phone = "+" + phone
+    await save_client_phone(session, message.from_user.id, phone)
+    await session.commit()
+    await message.answer("✅ Номер збережено!", reply_markup=ReplyKeyboardRemove())
+    await _start_master_selection(message, session, state)
+
+
+async def _start_master_selection(
+    message: Message, session: AsyncSession, state: FSMContext
+) -> None:
     masters = await get_active_masters(session)
     if not masters:
         await message.answer("Майстри ще не додані.", reply_markup=MAIN_MENU)

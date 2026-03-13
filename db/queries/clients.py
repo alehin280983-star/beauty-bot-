@@ -44,6 +44,20 @@ async def find_client_by_phone(
     return result.scalar_one_or_none()
 
 
+async def save_client_phone(
+    session: AsyncSession,
+    telegram_id: int,
+    phone: str,
+) -> None:
+    result = await session.execute(
+        select(Client).where(Client.telegram_id == telegram_id)
+    )
+    client = result.scalar_one_or_none()
+    if client is not None:
+        client.phone = phone
+        await session.flush()
+
+
 async def set_client_blocked(
     session: AsyncSession,
     client_id: uuid.UUID,
