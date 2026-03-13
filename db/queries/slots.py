@@ -49,14 +49,16 @@ async def get_slots_for_date(
     master_id: uuid.UUID,
     slot_date: date,
 ) -> List[Slot]:
-    # Query by Kyiv day boundaries converted to UTC
-    start = datetime(slot_date.year, slot_date.month, slot_date.day, 0, 0, tzinfo=_KYIV)
-    end = start + timedelta(days=1)
+    # Query by Kyiv day boundaries converted to naive UTC
+    start_kyiv = datetime(slot_date.year, slot_date.month, slot_date.day, 0, 0, tzinfo=_KYIV)
+    end_kyiv = start_kyiv + timedelta(days=1)
+    start_utc = start_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
     result = await session.execute(
         select(Slot)
         .where(Slot.master_id == master_id)
-        .where(Slot.starts_at >= start)
-        .where(Slot.starts_at < end)
+        .where(Slot.starts_at >= start_utc)
+        .where(Slot.starts_at < end_utc)
         .order_by(Slot.starts_at)
     )
     return list(result.scalars().all())
@@ -68,13 +70,15 @@ async def get_slots_for_range(
     date_from: date,
     date_to: date,
 ) -> List[Slot]:
-    start = datetime(date_from.year, date_from.month, date_from.day, 0, 0, tzinfo=_KYIV)
-    end = datetime(date_to.year, date_to.month, date_to.day, 0, 0, tzinfo=_KYIV) + timedelta(days=1)
+    start_kyiv = datetime(date_from.year, date_from.month, date_from.day, 0, 0, tzinfo=_KYIV)
+    end_kyiv = datetime(date_to.year, date_to.month, date_to.day, 0, 0, tzinfo=_KYIV) + timedelta(days=1)
+    start_utc = start_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
     result = await session.execute(
         select(Slot)
         .where(Slot.master_id == master_id)
-        .where(Slot.starts_at >= start)
-        .where(Slot.starts_at < end)
+        .where(Slot.starts_at >= start_utc)
+        .where(Slot.starts_at < end_utc)
         .order_by(Slot.starts_at)
     )
     return list(result.scalars().all())
