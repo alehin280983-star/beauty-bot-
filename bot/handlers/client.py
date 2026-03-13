@@ -395,10 +395,10 @@ async def on_confirm_booking(
 
     await callback.answer("Запис підтверджено! ✅")
     await state.clear()
-    await _finish_booking(callback.message, callback.from_user, data, slot_start, bot)
+    await _finish_booking(callback.message, callback.from_user, data, slot_start, bot, phone=client.phone or "")
 
 
-async def _finish_booking(message, from_user, data: dict, slot_start: datetime, bot: Bot) -> None:
+async def _finish_booking(message, from_user, data: dict, slot_start: datetime, bot: Bot, phone: str = "") -> None:
     tz = ZoneInfo(settings.studio_timezone)
     if slot_start.tzinfo:
         local = slot_start.astimezone(tz)
@@ -417,6 +417,7 @@ async def _finish_booking(message, from_user, data: dict, slot_start: datetime, 
     admin_text = (
         f"📌 <b>Новий запис</b>\n\n"
         f"Клієнт: {from_user.full_name} (@{from_user.username or '—'})\n"
+        f"Телефон: {phone or '—'}\n"
         f"Послуга: {data['service_name']}\n"
         f"Майстер: {data['master_name']}\n"
         f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
@@ -445,7 +446,7 @@ async def on_phone_post_booking(
     await message.answer("✅ Номер збережено!", reply_markup=ReplyKeyboardRemove())
 
     slot_start = datetime.fromisoformat(data["slot_start"])
-    await _finish_booking(message, message.from_user, data, slot_start, bot)
+    await _finish_booking(message, message.from_user, data, slot_start, bot, phone=phone)
 
 
 @router.message(BookingFSM.waiting_phone_post_booking, F.text == "❌ Скасувати запис")
