@@ -24,7 +24,7 @@ from bot.keyboards.calendar import CalendarNavCD, DateCD, calendar_keyboard
 from bot.keyboards.main_menu import MAIN_MENU
 from config import settings
 from db.models import Client
-from db.queries.bookings import NotEnoughSlots, SlotAlreadyTaken, create_booking
+from db.queries.bookings import NotEnoughSlots, SlotAlreadyTaken, cancel_booking, create_booking
 from db.queries.clients import get_or_create_client, save_client_phone
 from db.queries.masters import get_active_masters
 from db.queries.services import get_services_for_master
@@ -34,12 +34,12 @@ router = Router()
 
 
 class BookingFSM(StatesGroup):
-    waiting_phone = State()
     choosing_master = State()
     choosing_service = State()
     choosing_date = State()
     choosing_time = State()
     confirming = State()
+    waiting_phone_post_booking = State()
 
 
 # ── /start ────────────────────────────────────────────────────────────────────
@@ -87,44 +87,6 @@ async def cmd_about(message: Message) -> None:
 
 @router.message(F.text == "📋 Записатись")
 async def cmd_book(message: Message, session: AsyncSession, state: FSMContext) -> None:
-    from sqlalchemy import select as sa_select
-    client_result = await session.execute(
-        sa_select(Client).where(Client.telegram_id == message.from_user.id)
-    )
-    client = client_result.scalar_one_or_none()
-
-    if client is None or not client.phone:
-        await state.set_state(BookingFSM.waiting_phone)
-        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
-        kb = ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text="📱 Поділитись номером", request_contact=True)]],
-            resize_keyboard=True,
-            one_time_keyboard=True,
-        )
-        await message.answer(
-            "Для запису потрібен ваш номер телефону.\n\nНатисніть кнопку нижче:",
-            reply_markup=kb,
-        )
-        return
-
-    await _start_master_selection(message, session, state)
-
-
-@router.message(BookingFSM.waiting_phone, F.contact)
-async def on_phone_received(message: Message, session: AsyncSession, state: FSMContext) -> None:
-    from aiogram.types import ReplyKeyboardRemove
-    phone = message.contact.phone_number
-    if not phone.startswith("+"):
-        phone = "+" + phone
-    await save_client_phone(session, message.from_user.id, phone)
-    await session.commit()
-    await message.answer("✅ Номер збережено!", reply_markup=ReplyKeyboardRemove())
-    await _start_master_selection(message, session, state)
-
-
-async def _start_master_selection(
-    message: Message, session: AsyncSession, state: FSMContext
-) -> None:
     masters = await get_active_masters(session)
     if not masters:
         await message.answer("Майстри ще не додані.", reply_markup=MAIN_MENU)
@@ -409,28 +371,52 @@ async def on_confirm_booking(
         )
         return
 
-    await state.clear()
+    # Check if phone is needed
+    if not client.phone:
+        from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+        await state.set_state(BookingFSM.waiting_phone_post_booking)
+        await state.update_data(booking_id=str(booking.id))
+        kb = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="📱 Поділитись номером", request_contact=True)],
+                [KeyboardButton(text="❌ Скасувати запис")],
+            ],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        )
+        await callback.answer()
+        await callback.message.edit_text(
+            "✅ Майже готово!\n\n"
+            "Для підтвердження запису поділіться номером телефону.\n"
+            "Якщо відмовитесь — запис буде скасовано."
+        )
+        await callback.message.answer("Натисніть кнопку нижче:", reply_markup=kb)
+        return
 
+    await callback.answer("Запис підтверджено! ✅")
+    await state.clear()
+    await _finish_booking(callback.message, callback.from_user, data, slot_start, bot)
+
+
+async def _finish_booking(message, from_user, data: dict, slot_start: datetime, bot: Bot) -> None:
     tz = ZoneInfo(settings.studio_timezone)
     if slot_start.tzinfo:
         local = slot_start.astimezone(tz)
     else:
         local = slot_start.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
 
-    await callback.answer("Запис підтверджено! ✅")
-    await callback.message.edit_text(
+    await message.answer(
         f"✅ <b>Запис створено!</b>\n\n"
         f"💇 {data['service_name']}\n"
         f"👤 {data['master_name']}\n"
         f"📅 {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
-        f"💰 {data['price']} грн"
+        f"💰 {data['price']} грн",
+        reply_markup=MAIN_MENU,
     )
-    await callback.message.answer("Оберіть дію:", reply_markup=MAIN_MENU)
 
-    # Notify admins
     admin_text = (
         f"📌 <b>Новий запис</b>\n\n"
-        f"Клієнт: {callback.from_user.full_name} (@{callback.from_user.username or '—'})\n"
+        f"Клієнт: {from_user.full_name} (@{from_user.username or '—'})\n"
         f"Послуга: {data['service_name']}\n"
         f"Майстер: {data['master_name']}\n"
         f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
@@ -441,6 +427,42 @@ async def on_confirm_booking(
             await bot.send_message(admin_id, admin_text)
         except Exception:
             pass
+
+
+@router.message(BookingFSM.waiting_phone_post_booking, F.contact)
+async def on_phone_post_booking(
+    message: Message, session: AsyncSession, state: FSMContext, bot: Bot
+) -> None:
+    from aiogram.types import ReplyKeyboardRemove
+    phone = message.contact.phone_number
+    if not phone.startswith("+"):
+        phone = "+" + phone
+    await save_client_phone(session, message.from_user.id, phone)
+    await session.commit()
+
+    data = await state.get_data()
+    await state.clear()
+    await message.answer("✅ Номер збережено!", reply_markup=ReplyKeyboardRemove())
+
+    slot_start = datetime.fromisoformat(data["slot_start"])
+    await _finish_booking(message, message.from_user, data, slot_start, bot)
+
+
+@router.message(BookingFSM.waiting_phone_post_booking, F.text == "❌ Скасувати запис")
+async def on_cancel_post_booking(
+    message: Message, session: AsyncSession, state: FSMContext
+) -> None:
+    from aiogram.types import ReplyKeyboardRemove
+    data = await state.get_data()
+    booking_id = uuid.UUID(data["booking_id"])
+    await cancel_booking(session, booking_id)
+    await session.commit()
+    await state.clear()
+    await message.answer(
+        "Запис скасовано. Номер телефону не збережено.",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    await message.answer("Оберіть дію:", reply_markup=MAIN_MENU)
 
 
 @router.callback_query(BookingFSM.confirming, F.data == "cancel_booking_fsm")
