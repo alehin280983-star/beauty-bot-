@@ -21,7 +21,14 @@ from bot.filters import AdminFilter
 from bot.keyboards.calendar import CalendarNavCD, DateCD, calendar_keyboard
 from bot.keyboards.booking import TimeCD, time_slots_keyboard
 from config import settings
-from db.queries.bookings import create_booking, get_bookings_for_date
+from db.queries.bookings import (
+    cancel_booking,
+    change_booking_service,
+    create_booking,
+    get_bookings_for_date,
+    get_upcoming_bookings,
+    reschedule_booking,
+)
 from db.exceptions import NotEnoughSlots, SlotAlreadyTaken
 from db.queries.clients import create_phone_client, find_client_by_phone
 from db.queries.masters import (
@@ -112,6 +119,14 @@ class AdminUnblockFSM(StatesGroup):
     entering_range = State()
 
 
+class AdminEditFSM(StatesGroup):
+    choosing_booking = State()
+    choosing_action = State()
+    reschedule_date = State()
+    reschedule_time = State()
+    change_service = State()
+
+
 # ── CallbackData for admin_book ───────────────────────────────────────────────
 
 class AdminBookMasterCD(CallbackData, prefix="ab_m"):
@@ -125,6 +140,20 @@ class AdminBookServiceCD(CallbackData, prefix="ab_s"):
 class AdminBlockMasterCD(CallbackData, prefix="abl_m"):
     master_id: str
     action: str  # block | unblock
+
+
+class AdminEditBookingCD(CallbackData, prefix="aeb"):
+    booking_id: str
+
+
+class AdminEditActionCD(CallbackData, prefix="aea"):
+    booking_id: str
+    action: str  # reschedule | service | delete | confirm_delete
+
+
+class AdminEditServiceCD(CallbackData, prefix="aes"):
+    booking_id: str
+    service_id: str
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -739,7 +768,7 @@ async def admin_book_service_chosen(
     data = await state.get_data()
     master_id = uuid.UUID(data["master_id"])
     today = date.today()
-    max_date = today + timedelta(days=29)
+    max_date = today + timedelta(days=13)
 
     available = await get_dates_with_available_slots(session, master_id, service.duration_min, 30)
     await state.update_data(available_dates=[d.isoformat() for d in available])
@@ -764,7 +793,7 @@ async def admin_book_cal_nav(
     data = await state.get_data()
     available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
     today = date.today()
-    max_date = today + timedelta(days=29)
+    max_date = today + timedelta(days=13)
     await callback.answer()
     await callback.message.edit_reply_markup(
         reply_markup=calendar_keyboard(
@@ -1007,3 +1036,229 @@ async def admin_unblock_range_entered(
         f"🔓 Розблоковано {count} слотів на {slot_date.strftime('%d.%m.%Y')} "
         f"з {from_h}:00 до {to_h}:00."
     )
+
+
+# ── Адмін-меню (кнопки) ───────────────────────────────────────────────────────
+
+@router.message(F.text == "📅 Забронювати час")
+async def admin_menu_book(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    await cmd_admin_book(message, session, state)
+
+
+@router.message(F.text == "🗑 Видалити послугу")
+async def admin_menu_services(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    await state.clear()
+    await _show_services_menu(message, session)
+
+
+# ── Редагувати запис ──────────────────────────────────────────────────────────
+
+def _booking_label(b: dict) -> str:
+    tz = _tz()
+    st = b["start_time"]
+    local = st.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz) if not st.tzinfo else st.astimezone(tz)
+    client = b["client_name"] or b["client_phone"] or "—"
+    return f"{local.strftime('%d.%m %H:%M')} — {client} — {b['service_name']}"
+
+
+@router.message(F.text == "✏️ Редагувати запис")
+async def admin_menu_edit(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    bookings = await get_upcoming_bookings(session, days=14)
+    if not bookings:
+        await message.answer("Немає майбутніх записів на найближчі 14 днів.")
+        return
+    buttons = [
+        [InlineKeyboardButton(
+            text=_booking_label(b),
+            callback_data=AdminEditBookingCD(booking_id=str(b["id"])).pack(),
+        )]
+        for b in bookings
+    ]
+    await state.set_state(AdminEditFSM.choosing_booking)
+    await message.answer("Оберіть запис:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(AdminEditFSM.choosing_booking, AdminEditBookingCD.filter())
+async def admin_edit_booking_chosen(
+    callback: CallbackQuery, callback_data: AdminEditBookingCD,
+    session: AsyncSession, state: FSMContext,
+) -> None:
+    booking_id = uuid.UUID(callback_data.booking_id)
+    bookings = await get_upcoming_bookings(session, days=14)
+    b = next((x for x in bookings if x["id"] == booking_id), None)
+    if b is None:
+        await callback.answer("Запис не знайдено.")
+        await state.clear()
+        return
+
+    await state.update_data(
+        edit_booking_id=str(booking_id),
+        edit_master_id=str(b["master_id"]),
+        edit_service_id=str(b["service_id"]),
+        edit_duration=b["duration_min"],
+    )
+    await state.set_state(AdminEditFSM.choosing_action)
+
+    tz = _tz()
+    st = b["start_time"]
+    local = st.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz) if not st.tzinfo else st.astimezone(tz)
+    client = b["client_name"] or b["client_phone"] or "—"
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="📅 Перенести", callback_data=AdminEditActionCD(booking_id=str(booking_id), action="reschedule").pack()),
+            InlineKeyboardButton(text="🔄 Послуга", callback_data=AdminEditActionCD(booking_id=str(booking_id), action="service").pack()),
+            InlineKeyboardButton(text="❌ Видалити", callback_data=AdminEditActionCD(booking_id=str(booking_id), action="delete").pack()),
+        ]
+    ]
+    await callback.answer()
+    await callback.message.edit_text(
+        f"<b>{_booking_label(b)}</b>\n"
+        f"Майстер: {b['master_name']}\n"
+        f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+# ── Видалити бронь ─────────────────────────────────────────────────────────────
+
+@router.callback_query(AdminEditFSM.choosing_action, AdminEditActionCD.filter(F.action == "delete"))
+async def admin_edit_delete(
+    callback: CallbackQuery, callback_data: AdminEditActionCD,
+    session: AsyncSession, state: FSMContext,
+) -> None:
+    booking_id = uuid.UUID(callback_data.booking_id)
+    await cancel_booking(session, booking_id, cancelled_by="admin")
+    await session.commit()
+    await state.clear()
+    await callback.answer("Бронь видалено ✅")
+    await callback.message.edit_text("❌ Бронювання скасовано.")
+
+
+# ── Перенести ─────────────────────────────────────────────────────────────────
+
+@router.callback_query(AdminEditFSM.choosing_action, AdminEditActionCD.filter(F.action == "reschedule"))
+async def admin_edit_reschedule_start(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession,
+) -> None:
+    data = await state.get_data()
+    master_id = uuid.UUID(data["edit_master_id"])
+    duration = data["edit_duration"]
+    today = date.today()
+    max_date = today + timedelta(days=13)
+    available = await get_dates_with_available_slots(session, master_id, duration, 30, days=14)
+    await state.update_data(available_dates=[d.isoformat() for d in available])
+    await state.set_state(AdminEditFSM.reschedule_date)
+    await callback.answer()
+    await callback.message.edit_text(
+        "Оберіть нову дату:",
+        reply_markup=calendar_keyboard(today.year, today.month, set(available), today, max_date),
+    )
+
+
+@router.callback_query(AdminEditFSM.reschedule_date, CalendarNavCD.filter())
+async def admin_edit_reschedule_nav(
+    callback: CallbackQuery, callback_data: CalendarNavCD, state: FSMContext,
+) -> None:
+    if callback_data.action == "ignore":
+        await callback.answer()
+        return
+    data = await state.get_data()
+    available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
+    today = date.today()
+    max_date = today + timedelta(days=13)
+    await callback.answer()
+    await callback.message.edit_reply_markup(
+        reply_markup=calendar_keyboard(callback_data.year, callback_data.month, available, today, max_date)
+    )
+
+
+@router.callback_query(AdminEditFSM.reschedule_date, DateCD.filter())
+async def admin_edit_reschedule_date_chosen(
+    callback: CallbackQuery, callback_data: DateCD,
+    session: AsyncSession, state: FSMContext,
+) -> None:
+    chosen_date = date.fromisoformat(callback_data.date)
+    data = await state.get_data()
+    available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
+    if chosen_date not in available:
+        await callback.answer("На цю дату немає вільного часу.", show_alert=True)
+        return
+    master_id = uuid.UUID(data["edit_master_id"])
+    slots = await get_available_slots(session, master_id, chosen_date, data["edit_duration"], 30)
+    if not slots:
+        await callback.answer("Слоти зайняті, оберіть іншу дату.", show_alert=True)
+        return
+    await state.update_data(reschedule_date=chosen_date.isoformat())
+    await state.set_state(AdminEditFSM.reschedule_time)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Нова дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\nОберіть час:",
+        reply_markup=time_slots_keyboard(slots, _tz()),
+    )
+
+
+@router.callback_query(AdminEditFSM.reschedule_time, TimeCD.filter())
+async def admin_edit_reschedule_time_chosen(
+    callback: CallbackQuery, callback_data: TimeCD,
+    session: AsyncSession, state: FSMContext,
+) -> None:
+    from datetime import timezone as _tz_utc
+    data = await state.get_data()
+    booking_id = uuid.UUID(data["edit_booking_id"])
+    new_start = datetime.fromtimestamp(callback_data.ts, tz=_tz_utc.utc)
+    try:
+        await reschedule_booking(session, booking_id, new_start, step_min=30)
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        await callback.answer(f"Помилка: слот зайнятий.", show_alert=True)
+        return
+    await state.clear()
+    local = new_start.astimezone(_tz())
+    await callback.answer("Перенесено ✅")
+    await callback.message.edit_text(
+        f"✅ Запис перенесено на {local.strftime('%d.%m.%Y о %H:%M')}"
+    )
+
+
+# ── Змінити послугу ────────────────────────────────────────────────────────────
+
+@router.callback_query(AdminEditFSM.choosing_action, AdminEditActionCD.filter(F.action == "service"))
+async def admin_edit_service_start(
+    callback: CallbackQuery, state: FSMContext, session: AsyncSession,
+) -> None:
+    data = await state.get_data()
+    master_id = uuid.UUID(data["edit_master_id"])
+    booking_id = data["edit_booking_id"]
+    from db.queries.services import get_services_for_master
+    services = await get_services_for_master(session, master_id)
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{s.name} — {s.duration_min} хв",
+            callback_data=AdminEditServiceCD(booking_id=booking_id, service_id=str(s.id)).pack(),
+        )]
+        for s in services
+    ]
+    await state.set_state(AdminEditFSM.change_service)
+    await callback.answer()
+    await callback.message.edit_text("Оберіть нову послугу:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(AdminEditFSM.change_service, AdminEditServiceCD.filter())
+async def admin_edit_service_chosen(
+    callback: CallbackQuery, callback_data: AdminEditServiceCD,
+    session: AsyncSession, state: FSMContext,
+) -> None:
+    booking_id = uuid.UUID(callback_data.booking_id)
+    service_id = uuid.UUID(callback_data.service_id)
+    try:
+        await change_booking_service(session, booking_id, service_id, step_min=30)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        await callback.answer("Помилка: слоти зайняті для нової тривалості.", show_alert=True)
+        return
+    await state.clear()
+    await callback.answer("Послугу змінено ✅")
+    await callback.message.edit_text("✅ Послугу оновлено.")

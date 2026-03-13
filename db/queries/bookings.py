@@ -133,6 +133,86 @@ async def get_bookings_for_date(
     return [row._asdict() for row in result.all()]
 
 
+async def get_upcoming_bookings(
+    session: AsyncSession,
+    days: int = 14,
+) -> List[dict]:
+    """Return confirmed bookings from now to next N days. For admin use."""
+    now = datetime.utcnow()
+    cutoff = now + timedelta(days=days)
+    start_subq = (
+        select(func.min(Slot.starts_at))
+        .where(Slot.booking_id == Booking.id)
+        .correlate(Booking)
+        .scalar_subquery()
+    )
+    result = await session.execute(
+        select(
+            Booking.id,
+            Booking.master_id,
+            Booking.service_id,
+            Booking.price_at_booking,
+            Client.first_name.label("client_name"),
+            Client.phone.label("client_phone"),
+            Service.name.label("service_name"),
+            Service.duration_min,
+            Master.name.label("master_name"),
+            start_subq.label("start_time"),
+        )
+        .join(Client, Booking.client_id == Client.id)
+        .join(Service, Booking.service_id == Service.id)
+        .join(Master, Booking.master_id == Master.id)
+        .where(Booking.status == BookingStatus.confirmed)
+        .where(start_subq >= now)
+        .where(start_subq < cutoff)
+        .order_by(start_subq)
+    )
+    return [row._asdict() for row in result.all()]
+
+
+async def reschedule_booking(
+    session: AsyncSession,
+    booking_id: uuid.UUID,
+    new_start: datetime,
+    step_min: int,
+) -> Booking:
+    """Move booking to new time. Releases old slots, locks new ones."""
+    result = await session.execute(
+        select(Booking, Service.duration_min)
+        .join(Service, Booking.service_id == Service.id)
+        .where(Booking.id == booking_id)
+    )
+    booking, duration = result.one()
+    await release_slots(session, booking_id)
+    slots = await lock_slots_for_booking(session, booking.master_id, new_start, duration, step_min)
+    for slot in slots:
+        slot.booking_id = booking.id
+    booking.reminder_24h_sent = False
+    booking.reminder_2h_sent = False
+    return booking
+
+
+async def change_booking_service(
+    session: AsyncSession,
+    booking_id: uuid.UUID,
+    new_service_id: uuid.UUID,
+    step_min: int,
+) -> Booking:
+    """Change service on a booking. Re-locks slots for new duration at same time."""
+    start_time = await get_booking_start_time(session, booking_id)
+    result = await session.execute(select(Booking).where(Booking.id == booking_id))
+    booking = result.scalar_one()
+    new_svc_result = await session.execute(select(Service).where(Service.id == new_service_id))
+    new_svc = new_svc_result.scalar_one()
+    await release_slots(session, booking_id)
+    slots = await lock_slots_for_booking(session, booking.master_id, start_time, new_svc.duration_min, step_min)
+    for slot in slots:
+        slot.booking_id = booking.id
+    booking.service_id = new_service_id
+    booking.price_at_booking = new_svc.price
+    return booking
+
+
 async def get_booking_start_time(
     session: AsyncSession,
     booking_id: uuid.UUID,
