@@ -242,7 +242,7 @@ async def on_date_chosen(
     available_set = {date.fromisoformat(d) for d in data.get("available_dates", [])}
 
     if chosen_date not in available_set:
-        await callback.answer("На цю дату немає вільного часу.")
+        await callback.answer("На жаль, на цю дату всі майстри зайняті. Виберіть, будь ласка, іншу дату.", show_alert=True)
         return
 
     master_id = uuid.UUID(data["master_id"])
@@ -250,7 +250,7 @@ async def on_date_chosen(
 
     slots = await get_available_slots(session, master_id, chosen_date, duration_min, 30)
     if not slots:
-        await callback.answer("Слоти зайняті. Оберіть іншу дату.")
+        await callback.answer("На жаль, на цю дату всі майстри зайняті. Виберіть, будь ласка, іншу дату.", show_alert=True)
         return
 
     await state.update_data(chosen_date=chosen_date.isoformat())
