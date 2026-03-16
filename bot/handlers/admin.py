@@ -44,7 +44,7 @@ from db.queries.services import (
     toggle_service_visible,
     update_service,
 )
-from db.queries.slots import block_slot, block_slots_range, generate_slots, get_available_slots, get_dates_with_available_slots, get_slots_for_date, unblock_slots_range
+from db.queries.slots import block_slot, block_slots_range, generate_slots, get_available_slots, get_dates_with_available_slots, get_day_schedule, get_slots_for_date, unblock_slots_range
 
 router = Router()
 router.message.filter(AdminFilter())
@@ -125,6 +125,10 @@ class AdminEditFSM(StatesGroup):
     reschedule_date = State()
     reschedule_time = State()
     change_service = State()
+
+
+class AdminScheduleFSM(StatesGroup):
+    choosing_date = State()
 
 
 # ── CallbackData for admin_book ───────────────────────────────────────────────
@@ -1069,6 +1073,88 @@ async def admin_unblock_range_entered(
 @router.message(F.text == "📋 Записи на 2 тижні")
 async def admin_menu_week(message: Message, session: AsyncSession) -> None:
     await cmd_admin_week(message, session)
+
+
+# ── Розклад дня ────────────────────────────────────────────────────────────────
+
+@router.message(F.text == "🗓 Розклад дня")
+async def admin_menu_schedule(message: Message, state: FSMContext) -> None:
+    today = date.today()
+    max_date = today + timedelta(days=13)
+    await state.set_state(AdminScheduleFSM.choosing_date)
+    await message.answer(
+        "Оберіть дату:",
+        reply_markup=calendar_keyboard(today.year, today.month, set(), today, max_date),
+    )
+
+
+@router.callback_query(AdminScheduleFSM.choosing_date, CalendarNavCD.filter())
+async def admin_schedule_nav(
+    callback: CallbackQuery, callback_data: CalendarNavCD, state: FSMContext,
+) -> None:
+    if callback_data.action == "ignore":
+        await callback.answer()
+        return
+    today = date.today()
+    max_date = today + timedelta(days=13)
+    await callback.answer()
+    await callback.message.edit_reply_markup(
+        reply_markup=calendar_keyboard(
+            callback_data.year, callback_data.month, set(), today, max_date
+        )
+    )
+
+
+@router.callback_query(AdminScheduleFSM.choosing_date, DateCD.filter())
+async def admin_schedule_date_chosen(
+    callback: CallbackQuery, callback_data: DateCD,
+    session: AsyncSession, state: FSMContext,
+) -> None:
+    chosen_date = date.fromisoformat(callback_data.date)
+    await state.clear()
+    await callback.answer()
+
+    slots = await get_day_schedule(session, chosen_date)
+    if not slots:
+        await callback.message.edit_text(
+            f"На {chosen_date.strftime('%d.%m.%Y')} слотів немає."
+        )
+        return
+
+    tz = _tz()
+    from collections import defaultdict
+    by_master: dict = defaultdict(list)
+    for s in slots:
+        by_master[s["master_name"]].append(s)
+
+    lines = [f"📅 <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n"]
+    prev_booking_id = {}
+
+    for master_name, master_slots in sorted(by_master.items()):
+        lines.append(f"\n<b>{master_name}</b>")
+        prev_bid = None
+        for s in master_slots:
+            st = s["starts_at"]
+            local = st.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz) if not st.tzinfo else st.astimezone(tz)
+            time_str = local.strftime("%H:%M")
+
+            if s["is_blocked"]:
+                lines.append(f"{time_str} 🔒")
+            elif s["booking_id"] is not None:
+                if s["booking_id"] == prev_bid:
+                    lines.append(f"{time_str}    ↕")
+                else:
+                    client = s["client_name"] or s["client_phone"] or "—"
+                    lines.append(f"{time_str} ✅ {s['service_name']} — {client}")
+                prev_bid = s["booking_id"]
+            else:
+                lines.append(f"{time_str} · вільно")
+                prev_bid = None
+
+    text = "\n".join(lines)
+    if len(text) > 4000:
+        text = text[:4000] + "\n..."
+    await callback.message.edit_text(text)
 
 
 @router.message(F.text == "📅 Забронювати час")

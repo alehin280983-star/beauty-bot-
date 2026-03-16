@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.exceptions import NotEnoughSlots, SlotAlreadyTaken
-from db.models import Slot
+from db.models import Booking, Client, Master, Service, Slot
 
 
 async def generate_slots(
@@ -259,3 +259,33 @@ async def unblock_slot(session: AsyncSession, slot_id: uuid.UUID) -> None:
     slot = result.scalar_one()
     slot.is_blocked = False
     await session.flush()
+
+
+async def get_day_schedule(session: AsyncSession, slot_date: date) -> list[dict]:
+    """Return all slots for all masters on a given date with booking/client info."""
+    start_kyiv = datetime(slot_date.year, slot_date.month, slot_date.day, 0, 0, tzinfo=_KYIV)
+    end_kyiv = start_kyiv + timedelta(days=1)
+    start_utc = start_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_kyiv.astimezone(timezone.utc).replace(tzinfo=None)
+
+    from sqlalchemy.orm import outerjoin
+    result = await session.execute(
+        select(
+            Slot.id,
+            Slot.starts_at,
+            Slot.booking_id,
+            Slot.is_blocked,
+            Master.name.label("master_name"),
+            Service.name.label("service_name"),
+            Client.first_name.label("client_name"),
+            Client.phone.label("client_phone"),
+        )
+        .join(Master, Slot.master_id == Master.id)
+        .outerjoin(Booking, Slot.booking_id == Booking.id)
+        .outerjoin(Service, Booking.service_id == Service.id)
+        .outerjoin(Client, Booking.client_id == Client.id)
+        .where(Slot.starts_at >= start_utc)
+        .where(Slot.starts_at < end_utc)
+        .order_by(Master.name, Slot.starts_at)
+    )
+    return [row._asdict() for row in result.all()]
