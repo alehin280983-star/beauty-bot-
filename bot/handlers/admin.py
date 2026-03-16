@@ -188,6 +188,7 @@ async def cmd_admin(message: Message) -> None:
         "<b>Адмін-панель</b>\n\n"
         "/admin_today — записи на сьогодні\n"
         "/admin_tomorrow — записи на завтра\n"
+        "/admin_week — всі записи на 2 тижні\n"
         "/admin_slots — генерація слотів\n"
         "/admin_block — заблокувати години майстра\n"
         "/admin_unblock — розблокувати години майстра\n"
@@ -208,6 +209,31 @@ async def cmd_admin_today(message: Message, session: AsyncSession) -> None:
 @router.message(Command("admin_tomorrow"))
 async def cmd_admin_tomorrow(message: Message, session: AsyncSession) -> None:
     await _send_bookings_for_date(message, session, date.today() + timedelta(days=1))
+
+
+@router.message(Command("admin_week"))
+async def cmd_admin_week(message: Message, session: AsyncSession) -> None:
+    bookings = await get_upcoming_bookings(session, days=14)
+    if not bookings:
+        await message.answer("Немає записів на найближчі 2 тижні.")
+        return
+
+    tz = _tz()
+    from collections import defaultdict
+    by_date: dict = defaultdict(list)
+    for b in bookings:
+        st = b["start_time"]
+        local = st.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz) if not st.tzinfo else st.astimezone(tz)
+        by_date[local.date()].append((local, b))
+
+    lines = [f"<b>Записи на 2 тижні:</b>\n"]
+    for d in sorted(by_date.keys()):
+        lines.append(f"\n📅 <b>{d.strftime('%d.%m.%Y')}</b>")
+        for local, b in by_date[d]:
+            client = b["client_name"] or b["client_phone"] or "—"
+            lines.append(f"  {local.strftime('%H:%M')} — {client} — {b['service_name']} — {b['master_name']}")
+
+    await message.answer("\n".join(lines))
 
 
 async def _send_bookings_for_date(
@@ -1039,6 +1065,11 @@ async def admin_unblock_range_entered(
 
 
 # ── Адмін-меню (кнопки) ───────────────────────────────────────────────────────
+
+@router.message(F.text == "📋 Записи на 2 тижні")
+async def admin_menu_week(message: Message, session: AsyncSession) -> None:
+    await cmd_admin_week(message, session)
+
 
 @router.message(F.text == "📅 Забронювати час")
 async def admin_menu_book(message: Message, session: AsyncSession, state: FSMContext) -> None:
