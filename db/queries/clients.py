@@ -49,13 +49,33 @@ async def save_client_phone(
     telegram_id: int,
     phone: str,
 ) -> None:
-    result = await session.execute(
+    """Save phone for telegram client. If a phone-only client already exists, merge into it."""
+    from sqlalchemy import update as sa_update
+    from db.models import Booking
+
+    tg_client_result = await session.execute(
         select(Client).where(Client.telegram_id == telegram_id)
     )
-    client = result.scalar_one_or_none()
-    if client is not None:
-        client.phone = phone
-        await session.flush()
+    tg_client = tg_client_result.scalar_one_or_none()
+    if tg_client is None:
+        return
+
+    phone_client_result = await session.execute(
+        select(Client).where(Client.phone == phone).where(Client.telegram_id.is_(None))
+    )
+    phone_client = phone_client_result.scalar_one_or_none()
+
+    if phone_client is not None:
+        # Move all bookings from phone_client to tg_client
+        await session.execute(
+            sa_update(Booking)
+            .where(Booking.client_id == phone_client.id)
+            .values(client_id=tg_client.id)
+        )
+        await session.delete(phone_client)
+
+    tg_client.phone = phone
+    await session.flush()
 
 
 async def set_client_blocked(
