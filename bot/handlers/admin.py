@@ -763,7 +763,7 @@ async def admin_book_master_chosen(
 
     buttons = [
         [InlineKeyboardButton(
-            text=f"{s.name} — {s.duration_min} хв — {int(s.price)} грн",
+            text=f"{s.name} — {s.duration_min} хв",
             callback_data=AdminBookServiceCD(service_id=str(s.id)).pack(),
         )]
         for s in services
@@ -927,8 +927,7 @@ async def admin_book_phone_entered(
         f"Клієнт: {data['client_name']} ({phone})\n"
         f"Послуга: {data['service_name']}\n"
         f"Майстер: {data['master_name']}\n"
-        f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
-        f"Ціна: {data['price']} грн"
+        f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}"
     )
 
 

@@ -60,8 +60,7 @@ async def send_24h_reminders(bot, session_factory: async_sessionmaker[AsyncSessi
             f"⏰ <b>Нагадування про запис</b>\n\n"
             f"💇 {r['service_name']}\n"
             f"👤 {r['master_name']}\n"
-            f"📅 {_fmt(r['start_time'])}\n"
-            f"💰 {int(r['price_at_booking'])} грн\n\n"
+            f"📅 {_fmt(r['start_time'])}\n\n"
             "Чекаємо на вас завтра!"
         )
         try:

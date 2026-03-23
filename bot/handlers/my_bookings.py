@@ -50,8 +50,7 @@ async def cmd_my_bookings(message: Message, session: AsyncSession) -> None:
         text = (
             f"💇 <b>{b['service_name']}</b>\n"
             f"👤 {b['master_name']}\n"
-            f"📅 {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
-            f"💰 {int(b['price_at_booking'])} грн"
+            f"📅 {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}"
         )
         kb = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(

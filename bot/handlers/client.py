@@ -81,7 +81,7 @@ async def cmd_price(message: Message, session: AsyncSession) -> None:
             continue
         lines.append(f"\n<b>{master.name}</b>")
         for s in services:
-            lines.append(f"  {s.name} — {s.duration_min} хв — {int(s.price)} грн")
+            lines.append(f"  {s.name} — {s.duration_min} хв")
     if not lines:
         await message.answer("Послуги ще не додано.", reply_markup=MAIN_MENU)
         return
@@ -436,7 +436,6 @@ async def _finish_booking(message, from_user, data: dict, slot_start: datetime, 
         f"Послуга: {data['service_name']}\n"
         f"Майстер: {data['master_name']}\n"
         f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}\n"
-        f"Ціна: {data['price']} грн"
     )
     for admin_id in settings.admin_ids:
         try:
