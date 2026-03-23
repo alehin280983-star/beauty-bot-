@@ -199,9 +199,9 @@ async def _show_calendar(
     edit: bool = False,
 ) -> None:
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
 
-    available = await get_dates_with_available_slots(session, master_id, duration_min, 30, days=14)
+    available = await get_dates_with_available_slots(session, master_id, duration_min, 30, days=15)
     available_set = set(available)
 
     await state.update_data(
@@ -238,7 +238,7 @@ async def on_calendar_nav(
     data = await state.get_data()
     available_set = {date.fromisoformat(d) for d in data.get("available_dates", [])}
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
 
     kb = calendar_keyboard(
         callback_data.year, callback_data.month, available_set, today, max_date

@@ -798,7 +798,7 @@ async def admin_book_service_chosen(
     data = await state.get_data()
     master_id = uuid.UUID(data["master_id"])
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
 
     available = await get_dates_with_available_slots(session, master_id, service.duration_min, 30)
     await state.update_data(available_dates=[d.isoformat() for d in available])
@@ -823,7 +823,7 @@ async def admin_book_cal_nav(
     data = await state.get_data()
     available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
     await callback.answer()
     await callback.message.edit_reply_markup(
         reply_markup=calendar_keyboard(
@@ -1080,7 +1080,7 @@ async def admin_menu_week(message: Message, session: AsyncSession) -> None:
 @router.message(F.text == "🗓 Розклад дня")
 async def admin_menu_schedule(message: Message, state: FSMContext) -> None:
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
     await state.set_state(AdminScheduleFSM.choosing_date)
     await message.answer(
         "Оберіть дату:",
@@ -1096,7 +1096,7 @@ async def admin_schedule_nav(
         await callback.answer()
         return
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
     await callback.answer()
     await callback.message.edit_reply_markup(
         reply_markup=calendar_keyboard(
@@ -1262,7 +1262,7 @@ async def admin_edit_reschedule_start(
     master_id = uuid.UUID(data["edit_master_id"])
     duration = data["edit_duration"]
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
     available = await get_dates_with_available_slots(session, master_id, duration, 30, days=14)
     await state.update_data(available_dates=[d.isoformat() for d in available])
     await state.set_state(AdminEditFSM.reschedule_date)
@@ -1283,7 +1283,7 @@ async def admin_edit_reschedule_nav(
     data = await state.get_data()
     available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
     today = date.today()
-    max_date = today + timedelta(days=13)
+    max_date = today + timedelta(days=14)
     await callback.answer()
     await callback.message.edit_reply_markup(
         reply_markup=calendar_keyboard(callback_data.year, callback_data.month, available, today, max_date)
