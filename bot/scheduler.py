@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -140,6 +140,29 @@ async def send_review_requests(bot, session_factory: async_sessionmaker[AsyncSes
             logger.warning("Failed to send review request to %s: %s", r["client_telegram_id"], e)
 
 
+async def auto_generate_slots(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Generate slots for all active masters for the next slots_ahead_days days."""
+    from db.queries.masters import get_active_masters
+    from db.queries.slots import generate_slots
+
+    today = date.today()
+    async with session_factory() as session:
+        masters = await get_active_masters(session)
+        total = 0
+        for master in masters:
+            current = today
+            for _ in range(settings.slots_ahead_days):
+                count = await generate_slots(
+                    session, master.id, current,
+                    settings.work_start_hour, settings.work_end_hour, 30,
+                )
+                total += count
+                current += timedelta(days=1)
+        await session.commit()
+    if total:
+        logger.info("Auto-generated %d slots for %d masters", total, len(masters))
+
+
 def setup_scheduler(bot, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
 
@@ -165,6 +188,15 @@ def setup_scheduler(bot, session_factory: async_sessionmaker[AsyncSession]) -> A
         minutes=15,
         kwargs={"bot": bot, "session_factory": session_factory},
         id="review_requests",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        auto_generate_slots,
+        trigger="cron",
+        hour=3,
+        minute=0,
+        kwargs={"session_factory": session_factory},
+        id="auto_generate_slots",
         replace_existing=True,
     )
 

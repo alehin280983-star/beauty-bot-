@@ -9,7 +9,7 @@ from aiogram.fsm.storage.redis import RedisStorage
 from bot.handlers import admin, client, my_bookings, reviews
 from bot.middlewares.db import DbSessionMiddleware
 from bot.middlewares.error_handler import ErrorHandlerMiddleware
-from bot.scheduler import setup_scheduler
+from bot.scheduler import auto_generate_slots, setup_scheduler
 from config import settings
 from db.session import AsyncSessionFactory
 
@@ -35,7 +35,10 @@ async def main() -> None:
 
     scheduler = setup_scheduler(bot, AsyncSessionFactory)
     scheduler.start()
-    logger.info("Scheduler started with 3 jobs (15 min interval).")
+    logger.info("Scheduler started.")
+
+    await auto_generate_slots(AsyncSessionFactory)
+    logger.info("Initial slot generation complete.")
 
     logger.info("Starting bot...")
     try:
