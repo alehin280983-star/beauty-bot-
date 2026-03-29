@@ -82,6 +82,12 @@ class AdminSlotsFSM(StatesGroup):
     choosing_hours = State()
 
 
+class AdminSlotsRangeFSM(StatesGroup):
+    choosing_master = State()
+    choosing_dates = State()
+    choosing_hours = State()
+
+
 class AdminServiceFSM(StatesGroup):
     adding_name = State()
     adding_duration = State()
@@ -193,7 +199,8 @@ async def cmd_admin(message: Message) -> None:
         "/admin_today — записи на сьогодні\n"
         "/admin_tomorrow — записи на завтра\n"
         "/admin_week — всі записи на 2 тижні\n"
-        "/admin_slots — генерація слотів\n"
+        "/admin_slots — генерація слотів на один день\n"
+        "/admin_slots_range — генерація слотів на діапазон дат\n"
         "/admin_block — заблокувати години майстра\n"
         "/admin_unblock — розблокувати години майстра\n"
         "/admin_services — управління послугами\n"
@@ -325,6 +332,87 @@ async def admin_slots_hours_entered(
     await message.answer(
         f"✅ Створено {count} слотів на {slot_date.strftime('%d.%m.%Y')} "
         f"з {start_hour}:00 до {end_hour}:00."
+    )
+
+
+# ── /admin_slots_range ─────────────────────────────────────────────────────────
+
+@router.message(Command("admin_slots_range"))
+async def cmd_admin_slots_range(message: Message, session: AsyncSession, state: FSMContext) -> None:
+    masters = await get_active_masters(session)
+    if not masters:
+        await message.answer("Немає активних майстрів.")
+        return
+    buttons = [
+        [InlineKeyboardButton(
+            text=m.name,
+            callback_data=AdminMasterActionCD(master_id=str(m.id), action="slots_range").pack(),
+        )]
+        for m in masters
+    ]
+    await state.set_state(AdminSlotsRangeFSM.choosing_master)
+    await message.answer("Оберіть майстра:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@router.callback_query(AdminSlotsRangeFSM.choosing_master, AdminMasterActionCD.filter(F.action == "slots_range"))
+async def admin_slots_range_master_chosen(
+    callback: CallbackQuery, callback_data: AdminMasterActionCD, state: FSMContext
+) -> None:
+    await state.update_data(master_id=callback_data.master_id)
+    await state.set_state(AdminSlotsRangeFSM.choosing_dates)
+    await callback.answer()
+    await callback.message.edit_text(
+        "Введіть діапазон дат через пробіл (наприклад: <code>01.04.2026 12.04.2026</code>):"
+    )
+
+
+@router.message(AdminSlotsRangeFSM.choosing_dates)
+async def admin_slots_range_dates_entered(message: Message, state: FSMContext) -> None:
+    try:
+        parts = message.text.strip().split()
+        date_from = datetime.strptime(parts[0], "%d.%m.%Y").date()
+        date_to = datetime.strptime(parts[1], "%d.%m.%Y").date()
+        if date_from > date_to:
+            raise ValueError
+    except (ValueError, IndexError):
+        await message.answer("Невірний формат. Введіть дві дати через пробіл (наприклад: <code>01.04.2026 12.04.2026</code>):")
+        return
+    await state.update_data(date_from=date_from.isoformat(), date_to=date_to.isoformat())
+    await state.set_state(AdminSlotsRangeFSM.choosing_hours)
+    await message.answer("Введіть години початку та кінця через пробіл (наприклад: <code>9 19</code>):")
+
+
+@router.message(AdminSlotsRangeFSM.choosing_hours)
+async def admin_slots_range_hours_entered(
+    message: Message, session: AsyncSession, state: FSMContext
+) -> None:
+    try:
+        parts = message.text.strip().split()
+        start_hour, end_hour = int(parts[0]), int(parts[1])
+        if not (0 <= start_hour < end_hour <= 24):
+            raise ValueError
+    except (ValueError, IndexError):
+        await message.answer("Невірний формат. Введіть два числа через пробіл (наприклад: <code>9 19</code>):")
+        return
+
+    data = await state.get_data()
+    master_id = uuid.UUID(data["master_id"])
+    date_from = date.fromisoformat(data["date_from"])
+    date_to = date.fromisoformat(data["date_to"])
+    await state.clear()
+
+    total = 0
+    current = date_from
+    while current <= date_to:
+        count = await generate_slots(session, master_id, current, start_hour, end_hour, 30)
+        total += count
+        current += timedelta(days=1)
+    await session.commit()
+    days_count = (date_to - date_from).days + 1
+    await message.answer(
+        f"✅ Створено {total} слотів за {days_count} дн. "
+        f"({date_from.strftime('%d.%m.%Y')} — {date_to.strftime('%d.%m.%Y')}, "
+        f"{start_hour}:00–{end_hour}:00)"
     )
 
 
