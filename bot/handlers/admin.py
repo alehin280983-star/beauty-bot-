@@ -44,7 +44,7 @@ from db.queries.services import (
     toggle_service_visible,
     update_service,
 )
-from db.queries.slots import block_slot, block_slots_range, generate_slots, get_available_slots, get_dates_with_available_slots, get_day_schedule, get_slots_for_date, unblock_slots_range
+from db.queries.slots import block_slot, block_slots_range, generate_slots, get_available_slots, get_dates_with_available_slots, get_day_schedule, get_slots_for_date, unblock_all_future_slots, unblock_slots_range
 
 router = Router()
 router.message.filter(AdminFilter())
@@ -1466,3 +1466,24 @@ async def admin_edit_service_chosen(
     await state.clear()
     await callback.answer("Послугу змінено ✅")
     await callback.message.edit_text("✅ Послугу оновлено.")
+
+
+@router.message(Command("fix_slots"), AdminFilter())
+async def cmd_fix_slots(message: Message, session: AsyncSession) -> None:
+    unblocked, free_count = await unblock_all_future_slots(session)
+    await session.commit()
+
+    lines = ["🔧 <b>Діагностика слотів</b>\n"]
+    lines.append(f"Вільних слотів до виправлення: {free_count}")
+    lines.append(f"Розблоковано слотів: {unblocked}")
+
+    if unblocked > 0:
+        lines.append("\n✅ Слоти розблоковано. Перевірте календар.")
+    elif free_count > 0:
+        lines.append("\n⚠️ Слоти є і вільні, але дати всі з точками.")
+        lines.append("Швидше за все проблема в тривалості послуги — перевірте налаштування.")
+    else:
+        lines.append("\n❌ Вільних слотів немає взагалі.")
+        lines.append("Слоти не згенеровані або всі зайняті/заблоковані.")
+
+    await message.answer("\n".join(lines))

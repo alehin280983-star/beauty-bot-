@@ -261,6 +261,32 @@ async def unblock_slot(session: AsyncSession, slot_id: uuid.UUID) -> None:
     await session.flush()
 
 
+async def unblock_all_future_slots(session: AsyncSession) -> tuple[int, int]:
+    """Unblock all non-booked future slots. Returns (unblocked_count, free_slots_count)."""
+    from sqlalchemy import func
+    start_utc = (
+        datetime(date.today().year, date.today().month, date.today().day, 0, 0, tzinfo=_KYIV)
+        .astimezone(timezone.utc)
+        .replace(tzinfo=None)
+    )
+    free_result = await session.execute(
+        select(func.count(Slot.id))
+        .where(Slot.starts_at >= start_utc)
+        .where(Slot.is_blocked == False)  # noqa: E712
+        .where(Slot.booking_id.is_(None))
+    )
+    free_count = free_result.scalar() or 0
+
+    unblock_result = await session.execute(
+        update(Slot)
+        .where(Slot.starts_at >= start_utc)
+        .where(Slot.is_blocked == True)  # noqa: E712
+        .where(Slot.booking_id.is_(None))
+        .values(is_blocked=False)
+    )
+    return unblock_result.rowcount, free_count
+
+
 async def get_day_schedule(session: AsyncSession, slot_date: date) -> list[dict]:
     """Return all slots for all masters on a given date with booking/client info."""
     start_kyiv = datetime(slot_date.year, slot_date.month, slot_date.day, 0, 0, tzinfo=_KYIV)
