@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -13,7 +14,12 @@ from bot.scheduler import auto_generate_slots, setup_scheduler
 from config import settings
 from db.session import AsyncSessionFactory
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+    force=True,
+)
 logger = logging.getLogger(__name__)
 
 
