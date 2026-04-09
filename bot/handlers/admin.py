@@ -234,6 +234,8 @@ async def cmd_admin_week(message: Message, session: AsyncSession) -> None:
     by_date: dict = defaultdict(list)
     for b in bookings:
         st = b["start_time"]
+        if st is None:
+            continue  # Skip bookings without time slots
         local = st.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz) if not st.tzinfo else st.astimezone(tz)
         by_date[local.date()].append((local, b))
 
@@ -259,6 +261,8 @@ async def _send_bookings_for_date(
     lines = [f"<b>Записи на {label} ({target.strftime('%d.%m.%Y')}):</b>\n"]
     for b in bookings:
         start: datetime = b["start_time"]
+        if start is None:
+            continue  # Skip bookings without time slots
         client = b["client_name"] or b["client_phone"] or "—"
         lines.append(
             f"{_fmt_time(start)} — {client} — {b['service_name']} — {b['master_name']}"
@@ -1260,6 +1264,8 @@ async def admin_menu_services(message: Message, session: AsyncSession, state: FS
 def _booking_label(b: dict) -> str:
     tz = _tz()
     st = b["start_time"]
+    if st is None:
+        return f"❌ Запис без часу — {b.get('client_name') or b.get('client_phone') or '—'} — {b.get('service_name', 'Невідомо')}"
     local = st.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz) if not st.tzinfo else st.astimezone(tz)
     client = b["client_name"] or b["client_phone"] or "—"
     return f"{local.strftime('%d.%m %H:%M')} — {client} — {b['service_name']}"
@@ -1305,6 +1311,11 @@ async def admin_edit_booking_chosen(
 
     tz = _tz()
     st = b["start_time"]
+    if st is None:
+        # Booking without time slot - can't reschedule
+        await callback.answer("Цю запис неможна перенести - вона не має часу.")
+        await state.clear()
+        return
     local = st.replace(tzinfo=ZoneInfo("UTC")).astimezone(tz) if not st.tzinfo else st.astimezone(tz)
     client = b["client_name"] or b["client_phone"] or "—"
 
