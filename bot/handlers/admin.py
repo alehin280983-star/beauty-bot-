@@ -204,6 +204,41 @@ def _fmt_date(dt: datetime) -> str:
     return local.strftime("%d.%m.%Y")
 
 
+_TELEGRAM_SAFE_MESSAGE_LENGTH = 3500
+_TELEGRAM_SAFE_LINE_LENGTH = 1000
+
+
+def _truncate_line(line: str, max_length: int = _TELEGRAM_SAFE_LINE_LENGTH) -> str:
+    if len(line) <= max_length:
+        return line
+    return line[: max_length - 1] + "…"
+
+
+async def _answer_chunked(
+    message: Message,
+    lines: list[str],
+    max_length: int = _TELEGRAM_SAFE_MESSAGE_LENGTH,
+) -> None:
+    chunk: list[str] = []
+    chunk_len = 0
+
+    for raw_line in lines:
+        line = _truncate_line(raw_line)
+        add_len = len(line) if not chunk else len(line) + 1
+
+        if chunk and chunk_len + add_len > max_length:
+            await message.answer("\n".join(chunk))
+            chunk = [line]
+            chunk_len = len(line)
+            continue
+
+        chunk.append(line)
+        chunk_len += add_len
+
+    if chunk:
+        await message.answer("\n".join(chunk))
+
+
 # ── /admin ─────────────────────────────────────────────────────────────────────
 
 
@@ -260,36 +295,19 @@ async def cmd_admin_week(message: Message, session: AsyncSession) -> None:
         )
         by_date[local.date()].append((local, b))
 
-    MAX_MESSAGE_LENGTH = 4000
-    messages = []
-    current_chunk = [f"<b>Записи на 2 тижні:</b>\n"]
+    lines = ["<b>Записи на 2 тижні:</b>"]
 
     for d in sorted(by_date.keys()):
-        date_line = f"\n📅 <b>{d.strftime('%d.%m.%Y')}</b>"
-        if len("\n".join(current_chunk + [date_line])) > MAX_MESSAGE_LENGTH:
-            messages.append("\n".join(current_chunk))
-            current_chunk = [
-                f"...\n{date_line}"
-            ]  # Start new chunk with continuation and date
-        else:
-            current_chunk.append(date_line)
+        lines.append("")
+        lines.append(f"📅 <b>{d.strftime('%d.%m.%Y')}</b>")
 
         for local, b in by_date[d]:
             client = b["client_name"] or b["client_phone"] or "—"
-            booking_line = f"  {local.strftime('%H:%M')} — {client} — {b['service_name']} — {b['master_name']}"
-            if len("\n".join(current_chunk + [booking_line])) > MAX_MESSAGE_LENGTH:
-                messages.append("\n".join(current_chunk))
-                current_chunk = [
-                    f"...\n{booking_line}"
-                ]  # Start new chunk with continuation and booking
-            else:
-                current_chunk.append(booking_line)
+            lines.append(
+                f"  {local.strftime('%H:%M')} — {client} — {b['service_name']} — {b['master_name']}"
+            )
 
-    if current_chunk:  # Add any remaining lines
-        messages.append("\n".join(current_chunk))
-
-    for msg in messages:
-        await message.answer(msg)
+    await _answer_chunked(message, lines)
 
 
 async def _send_bookings_for_date(
@@ -301,7 +319,7 @@ async def _send_bookings_for_date(
         await message.answer(f"Записів на {label} немає.")
         return
 
-    lines = [f"<b>Записи на {label} ({target.strftime('%d.%m.%Y')}):</b>\n"]
+    lines = [f"<b>Записи на {label} ({target.strftime('%d.%m.%Y')}):</b>"]
     for b in bookings:
         start: datetime = b["start_time"]
         if start is None:
@@ -310,7 +328,7 @@ async def _send_bookings_for_date(
         lines.append(
             f"{_fmt_time(start)} — {client} — {b['service_name']} — {b['master_name']}"
         )
-    await message.answer("\n".join(lines))
+    await _answer_chunked(message, lines)
 
 
 # ── /admin_slots ───────────────────────────────────────────────────────────────
@@ -947,12 +965,14 @@ async def cmd_admin_reviews(message: Message, session: AsyncSession) -> None:
         await message.answer("Відгуків поки немає.")
         return
 
-    lines = ["<b>Останні відгуки:</b>\n"]
+    lines = ["<b>Останні відгуки:</b>"]
     for r in reviews:
         stars = "⭐" * r.rating
         comment = r.comment or "—"
-        lines.append(f"{stars}\n{comment}\n")
-    await message.answer("\n".join(lines))
+        lines.append("")
+        lines.append(stars)
+        lines.append(comment)
+    await _answer_chunked(message, lines)
 
 
 # ── /admin_book ────────────────────────────────────────────────────────────────
