@@ -54,9 +54,7 @@ async def cancel_booking(
         if cancelled_by == "client"
         else BookingStatus.cancelled_admin
     )
-    result = await session.execute(
-        select(Booking).where(Booking.id == booking_id)
-    )
+    result = await session.execute(select(Booking).where(Booking.id == booking_id))
     booking = result.scalar_one()
     booking.status = status
     await release_slots(session, booking_id)
@@ -98,6 +96,7 @@ async def get_bookings_for_date(
 ) -> List[dict]:
     """Return all confirmed bookings for a date. For admin use."""
     from datetime import date as date_type
+
     if isinstance(target_date, date_type):
         start = datetime(target_date.year, target_date.month, target_date.day, 0, 0)
     else:
@@ -184,7 +183,9 @@ async def reschedule_booking(
     )
     booking, duration = result.one()
     await release_slots(session, booking_id)
-    slots = await lock_slots_for_booking(session, booking.master_id, new_start, duration, step_min)
+    slots = await lock_slots_for_booking(
+        session, booking.master_id, new_start, duration, step_min
+    )
     for slot in slots:
         slot.booking_id = booking.id
     booking.reminder_24h_sent = False
@@ -202,10 +203,14 @@ async def change_booking_service(
     start_time = await get_booking_start_time(session, booking_id)
     result = await session.execute(select(Booking).where(Booking.id == booking_id))
     booking = result.scalar_one()
-    new_svc_result = await session.execute(select(Service).where(Service.id == new_service_id))
+    new_svc_result = await session.execute(
+        select(Service).where(Service.id == new_service_id)
+    )
     new_svc = new_svc_result.scalar_one()
     await release_slots(session, booking_id)
-    slots = await lock_slots_for_booking(session, booking.master_id, start_time, new_svc.duration_min, step_min)
+    slots = await lock_slots_for_booking(
+        session, booking.master_id, start_time, new_svc.duration_min, step_min
+    )
     for slot in slots:
         slot.booking_id = booking.id
     booking.service_id = new_service_id
@@ -322,9 +327,7 @@ async def mark_24h_reminder_sent(
     session: AsyncSession,
     booking_id: uuid.UUID,
 ) -> None:
-    result = await session.execute(
-        select(Booking).where(Booking.id == booking_id)
-    )
+    result = await session.execute(select(Booking).where(Booking.id == booking_id))
     booking = result.scalar_one()
     booking.reminder_24h_sent = True
     await session.flush()
@@ -334,9 +337,7 @@ async def mark_2h_reminder_sent(
     session: AsyncSession,
     booking_id: uuid.UUID,
 ) -> None:
-    result = await session.execute(
-        select(Booking).where(Booking.id == booking_id)
-    )
+    result = await session.execute(select(Booking).where(Booking.id == booking_id))
     booking = result.scalar_one()
     booking.reminder_2h_sent = True
     await session.flush()
@@ -347,9 +348,7 @@ async def mark_review_requested(
     booking_id: uuid.UUID,
 ) -> None:
     """Mark review as requested and set booking status to completed."""
-    result = await session.execute(
-        select(Booking).where(Booking.id == booking_id)
-    )
+    result = await session.execute(select(Booking).where(Booking.id == booking_id))
     booking = result.scalar_one()
     booking.review_requested = True
     booking.status = BookingStatus.completed
