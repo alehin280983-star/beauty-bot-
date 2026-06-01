@@ -143,15 +143,20 @@ async def send_review_requests(bot, session_factory: async_sessionmaker[AsyncSes
 async def auto_generate_slots(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Generate slots for all active masters for the next slots_ahead_days days."""
     from db.queries.masters import get_active_masters
-    from db.queries.slots import generate_slots
+    from db.queries.slots import block_slots_range, generate_slots
 
     today = date.today()
     async with session_factory() as session:
         masters = await get_active_masters(session)
         total = 0
+        blocked_before_open = 0
         for master in masters:
             current = today
             for _ in range(settings.slots_ahead_days):
+                if settings.work_start_hour > 0:
+                    blocked_before_open += await block_slots_range(
+                        session, master.id, current, 0, settings.work_start_hour
+                    )
                 count = await generate_slots(
                     session, master.id, current,
                     settings.work_start_hour, settings.work_end_hour, 30,
@@ -161,6 +166,12 @@ async def auto_generate_slots(session_factory: async_sessionmaker[AsyncSession])
         await session.commit()
     if total:
         logger.info("Auto-generated %d slots for %d masters", total, len(masters))
+    if blocked_before_open:
+        logger.info(
+            "Blocked %d free slots before opening hour %02d:00",
+            blocked_before_open,
+            settings.work_start_hour,
+        )
 
 
 def setup_scheduler(bot, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIOScheduler:

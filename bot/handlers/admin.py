@@ -381,7 +381,7 @@ async def admin_slots_date_entered(message: Message, state: FSMContext) -> None:
     await state.update_data(slot_date=d.isoformat())
     await state.set_state(AdminSlotsFSM.choosing_hours)
     await message.answer(
-        "Введіть години початку та кінця через пробіл (наприклад: <code>9 19</code>):"
+        "Введіть години початку та кінця через пробіл (наприклад: <code>10 19</code>):"
     )
 
 
@@ -392,11 +392,12 @@ async def admin_slots_hours_entered(
     try:
         parts = message.text.strip().split()
         start_hour, end_hour = int(parts[0]), int(parts[1])
-        if not (0 <= start_hour < end_hour <= 24):
+        if not (settings.work_start_hour <= start_hour < end_hour <= 24):
             raise ValueError
     except (ValueError, IndexError):
         await message.answer(
-            "Невірний формат. Введіть два числа через пробіл (наприклад: <code>9 19</code>):"
+            "Невірний формат. Початок має бути не раніше "
+            f"{settings.work_start_hour}:00. Наприклад: <code>10 19</code>:"
         )
         return
 
@@ -476,7 +477,7 @@ async def admin_slots_range_dates_entered(message: Message, state: FSMContext) -
     )
     await state.set_state(AdminSlotsRangeFSM.choosing_hours)
     await message.answer(
-        "Введіть години початку та кінця через пробіл (наприклад: <code>9 19</code>):"
+        "Введіть години початку та кінця через пробіл (наприклад: <code>10 19</code>):"
     )
 
 
@@ -487,11 +488,12 @@ async def admin_slots_range_hours_entered(
     try:
         parts = message.text.strip().split()
         start_hour, end_hour = int(parts[0]), int(parts[1])
-        if not (0 <= start_hour < end_hour <= 24):
+        if not (settings.work_start_hour <= start_hour < end_hour <= 24):
             raise ValueError
     except (ValueError, IndexError):
         await message.answer(
-            "Невірний формат. Введіть два числа через пробіл (наприклад: <code>9 19</code>):"
+            "Невірний формат. Початок має бути не раніше "
+            f"{settings.work_start_hour}:00. Наприклад: <code>10 19</code>:"
         )
         return
 

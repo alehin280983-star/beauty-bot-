@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     cancel_deadline_hours: int = 2
     review_delay_hours: int = 3
     studio_timezone: str = "Europe/Kyiv"
-    work_start_hour: int = 9
+    work_start_hour: int = 10
     work_end_hour: int = 20
     slots_ahead_days: int = 60
 
