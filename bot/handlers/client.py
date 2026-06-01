@@ -334,7 +334,8 @@ def _confirm_keyboard():
         [
             InlineKeyboardButton(text="✅ Підтвердити", callback_data="confirm_booking"),
             InlineKeyboardButton(text="❌ Скасувати", callback_data="cancel_booking_fsm"),
-        ]
+        ],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_time")],
     ])
 
 
@@ -488,6 +489,32 @@ async def on_cancel_booking_fsm(
     await callback.answer()
     await callback.message.edit_text("Запис скасовано.")
     await callback.message.answer("Оберіть дію:", reply_markup=MAIN_MENU)
+
+
+@router.callback_query(BookingFSM.confirming, F.data == "back_to_time")
+async def back_to_time_from_confirm(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    chosen_date = date.fromisoformat(data["chosen_date"])
+    master_id = uuid.UUID(data["master_id"])
+    slots = await get_available_slots(
+        session, master_id, chosen_date, data["duration_min"], 30
+    )
+    if not slots:
+        await callback.answer("На цю дату вже немає вільного часу.", show_alert=True)
+        return
+
+    await state.set_state(BookingFSM.choosing_time)
+    tz = ZoneInfo(settings.studio_timezone)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Послуга: <b>{data['service_name']}</b>\n"
+        f"Майстер: <b>{data['master_name']}</b>\n"
+        f"Дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\n"
+        "Оберіть час:",
+        reply_markup=time_slots_keyboard(slots, tz),
+    )
 
 
 @router.callback_query(BookingFSM.choosing_time, F.data == "back_to_date")
