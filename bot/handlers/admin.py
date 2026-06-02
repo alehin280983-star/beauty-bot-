@@ -1100,10 +1100,34 @@ async def admin_book_master_chosen(
         ]
         for s in services
     ]
+    buttons.append(
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_book_back_to_master")]
+    )
     await callback.answer()
     await callback.message.edit_text(
         f"Майстер: <b>{master.name}</b>\n\nОберіть послугу:",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+@router.callback_query(AdminBookFSM.choosing_service, F.data == "admin_book_back_to_master")
+async def admin_book_back_to_master(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext
+) -> None:
+    masters = await get_active_masters(session)
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text=m.name,
+                callback_data=AdminBookMasterCD(master_id=str(m.id)).pack(),
+            )
+        ]
+        for m in masters
+    ]
+    await state.set_state(AdminBookFSM.choosing_master)
+    await callback.answer()
+    await callback.message.edit_text(
+        "Оберіть майстра:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
 
@@ -1147,6 +1171,45 @@ async def admin_book_service_chosen(
         reply_markup=calendar_keyboard(
             today.year, today.month, set(available), today, max_date
         ),
+    )
+
+
+@router.callback_query(AdminBookFSM.choosing_date, F.data == "back_to_service")
+async def admin_book_back_to_service(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    master_id = uuid.UUID(data["master_id"])
+
+    from db.models import MasterService, Service
+    from sqlalchemy import select
+
+    svc_result = await session.execute(
+        select(Service)
+        .join(MasterService, MasterService.service_id == Service.id)
+        .where(MasterService.master_id == master_id)
+        .where(Service.is_visible == True)  # noqa: E712
+        .order_by(Service.name)
+    )
+    services = list(svc_result.scalars().all())
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text=f"{s.name} — {s.duration_min} хв",
+                callback_data=AdminBookServiceCD(service_id=str(s.id)).pack(),
+            )
+        ]
+        for s in services
+    ]
+    buttons.append(
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_book_back_to_master")]
+    )
+
+    await state.set_state(AdminBookFSM.choosing_service)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Майстер: <b>{data['master_name']}</b>\n\nОберіть послугу:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
 
 
@@ -1201,6 +1264,25 @@ async def admin_book_date_chosen(
         f"Дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\n"
         "Оберіть час:",
         reply_markup=time_slots_keyboard(slots, _tz()),
+    )
+
+
+@router.callback_query(AdminBookFSM.choosing_time, F.data == "back_to_date")
+async def admin_book_back_to_date(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
+    today = date.today()
+    max_date = today + timedelta(days=14)
+
+    await state.set_state(AdminBookFSM.choosing_date)
+    await callback.answer()
+    await callback.message.edit_text(
+        f"Майстер: <b>{data['master_name']}</b>\n"
+        f"Послуга: <b>{data['service_name']}</b>\n\n"
+        "Оберіть дату:",
+        reply_markup=calendar_keyboard(today.year, today.month, available, today, max_date),
     )
 
 
@@ -1458,6 +1540,13 @@ async def admin_menu_schedule(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.callback_query(AdminScheduleFSM.choosing_date, F.data == "back_to_service")
+async def admin_schedule_back(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer()
+    await callback.message.edit_text("Оберіть дію в адмін-меню.")
+
+
 @router.callback_query(AdminScheduleFSM.choosing_date, CalendarNavCD.filter())
 async def admin_schedule_nav(
     callback: CallbackQuery,
@@ -1566,6 +1655,64 @@ def _booking_label(b: dict) -> str:
     )
     client = b["client_name"] or b["client_phone"] or "—"
     return f"{local.strftime('%d.%m %H:%M')} — {client} — {b['service_name']}"
+
+
+async def _show_admin_edit_actions(
+    message: Message,
+    session: AsyncSession,
+    state: FSMContext,
+    booking_id: uuid.UUID,
+) -> bool:
+    bookings = await get_upcoming_bookings(session, days=14)
+    b = next((x for x in bookings if x["id"] == booking_id), None)
+    if b is None or b["start_time"] is None:
+        await state.clear()
+        await message.edit_text("Запис не знайдено або він не має часу.")
+        return False
+
+    await state.update_data(
+        edit_booking_id=str(booking_id),
+        edit_master_id=str(b["master_id"]),
+        edit_service_id=str(b["service_id"]),
+        edit_duration=b["duration_min"],
+    )
+    await state.set_state(AdminEditFSM.choosing_action)
+
+    st = b["start_time"]
+    local = (
+        st.replace(tzinfo=ZoneInfo("UTC")).astimezone(_tz())
+        if not st.tzinfo
+        else st.astimezone(_tz())
+    )
+    buttons = [
+        [
+            InlineKeyboardButton(
+                text="📅 Перенести",
+                callback_data=AdminEditActionCD(
+                    booking_id=str(booking_id), action="reschedule"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="🔄 Послуга",
+                callback_data=AdminEditActionCD(
+                    booking_id=str(booking_id), action="service"
+                ).pack(),
+            ),
+            InlineKeyboardButton(
+                text="❌ Видалити",
+                callback_data=AdminEditActionCD(
+                    booking_id=str(booking_id), action="delete"
+                ).pack(),
+            ),
+        ]
+    ]
+    await message.edit_text(
+        f"<b>{_booking_label(b)}</b>\n"
+        f"Майстер: {b['master_name']}\n"
+        f"Дата: {local.strftime('%d.%m.%Y')} о {local.strftime('%H:%M')}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+    return True
 
 
 @router.message(F.text == "✏️ Редагувати запис")
@@ -1709,6 +1856,16 @@ async def admin_edit_reschedule_start(
     )
 
 
+@router.callback_query(AdminEditFSM.reschedule_date, F.data == "back_to_service")
+async def admin_edit_reschedule_back_to_actions(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    booking_id = uuid.UUID(data["edit_booking_id"])
+    await callback.answer()
+    await _show_admin_edit_actions(callback.message, session, state, booking_id)
+
+
 @router.callback_query(AdminEditFSM.reschedule_date, CalendarNavCD.filter())
 async def admin_edit_reschedule_nav(
     callback: CallbackQuery,
@@ -1756,6 +1913,22 @@ async def admin_edit_reschedule_date_chosen(
     await callback.message.edit_text(
         f"Нова дата: <b>{chosen_date.strftime('%d.%m.%Y')}</b>\n\nОберіть час:",
         reply_markup=time_slots_keyboard(slots, _tz()),
+    )
+
+
+@router.callback_query(AdminEditFSM.reschedule_time, F.data == "back_to_date")
+async def admin_edit_reschedule_back_to_date(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    available = {date.fromisoformat(d) for d in data.get("available_dates", [])}
+    today = date.today()
+    max_date = today + timedelta(days=14)
+    await state.set_state(AdminEditFSM.reschedule_date)
+    await callback.answer()
+    await callback.message.edit_text(
+        "Оберіть нову дату:",
+        reply_markup=calendar_keyboard(today.year, today.month, available, today, max_date),
     )
 
 
