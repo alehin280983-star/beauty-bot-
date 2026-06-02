@@ -706,9 +706,37 @@ async def admin_service_price_update(
 
 @router.callback_query(F.data == "admin_services_back")
 async def admin_services_back(callback: CallbackQuery, session: AsyncSession) -> None:
+    from db.models import Service
+    from sqlalchemy import select
+
+    result = await session.execute(select(Service).order_by(Service.name))
+    services = list(result.scalars().all())
+
+    buttons = []
+    for s in services:
+        status = "✅" if s.is_visible else "🚫"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{status} {s.name} — {s.duration_min}хв — {int(s.price)}грн",
+                    callback_data=AdminServiceActionCD(
+                        service_id=str(s.id), action="menu"
+                    ).pack(),
+                )
+            ]
+        )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Додати послугу", callback_data="admin_add_service"
+            )
+        ]
+    )
     await callback.answer()
-    await callback.message.delete()
-    await _show_services_menu(callback.message, session)
+    await callback.message.edit_text(
+        "<b>Послуги:</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
 
 
 # ── /admin_masters ─────────────────────────────────────────────────────────────
@@ -952,9 +980,37 @@ async def admin_master_photo_received(
 
 @router.callback_query(F.data == "admin_masters_back")
 async def admin_masters_back(callback: CallbackQuery, session: AsyncSession) -> None:
+    from db.models import Master
+    from sqlalchemy import select
+
+    result = await session.execute(select(Master).order_by(Master.name))
+    masters = list(result.scalars().all())
+
+    buttons = []
+    for m in masters:
+        status = "✅" if m.is_active else "🚫"
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=f"{status} {m.name}",
+                    callback_data=AdminMasterActionCD(
+                        master_id=str(m.id), action="menu"
+                    ).pack(),
+                )
+            ]
+        )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text="➕ Додати майстра", callback_data="admin_add_master"
+            )
+        ]
+    )
     await callback.answer()
-    await callback.message.delete()
-    await _show_masters_menu(callback.message, session)
+    await callback.message.edit_text(
+        "<b>Майстри:</b>",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
 
 
 # ── /admin_reviews ─────────────────────────────────────────────────────────────
